@@ -68,8 +68,8 @@ rbac-ipfs-implementation/
 
 ```bash
 cd client-sdk/scripts
-chmod +x functional_test.sh
-./functional_test.sh
+chmod +x automation.sh
+./automation.sh <org_count> [up|down]
 
 ```
 
@@ -91,7 +91,7 @@ make install
 ```bash
 cd evaluation
 npm install
-./run_benchmark.sh systemMix
+./run_benchmark.sh <org_count> systemMix
 
 ```
 
