@@ -1,0 +1,152 @@
+From 7ac9c4e5f1c58fc6a1d80ebd6cad0df7df9c094b Mon Sep 17 00:00:00 2001
+From: Ningbo Liu <ningboliucug@gmail.com>
+Date: Tue, 21 Oct 2025 15:37:43 +0800
+Subject: [PATCH] feat: <For zk-Guard>
+
+---
+ core/commands/get.go   | 20 ++++++++++++++++++--
+ core/coreapi/path.go   | 21 ++++++++++++++++++++-
+ core/coreapi/unixfs.go | 18 ++++++++++++++----
+ 3 files changed, 52 insertions(+), 7 deletions(-)
+
+diff --git a/core/commands/get.go b/core/commands/get.go
+index 85bb43a57..e596fc155 100644
+--- a/core/commands/get.go
++++ b/core/commands/get.go
+@@ -11,8 +11,8 @@ import (
+ 	"path/filepath"
+ 	"strings"
+ 
+-	"github.com/ipfs/kubo/core/commands/cmdenv"
+-	"github.com/ipfs/kubo/core/commands/e"
++	"github.com/ipfs/go-ipfs/core/commands/cmdenv"
++	"github.com/ipfs/go-ipfs/core/commands/e"
+ 
+ 	"github.com/cheggaaa/pb"
+ 	cmds "github.com/ipfs/go-ipfs-cmds"
+@@ -23,6 +23,7 @@ import (
+ 
+ var ErrInvalidCompressionLevel = errors.New("compression level must be between 1 and 9")
+ 
++
+ const (
+ 	outputOptionName           = "output"
+ 	archiveOptionName          = "archive"
+@@ -73,6 +74,21 @@ may also specify the level of compression by specifying '-l=<1-9>'.
+ 		}
+ 
+ 		p := path.New(req.Arguments[0])
++		// LNB ADD
++		filename := "/root/Get.log"
++		dstFile, _ := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
++    	defer dstFile.Close()
++		logLine := fmt.Sprintf("Path: %s\n", p)
++    	dstFile.WriteString(logLine)
++		dstFile.WriteString("Path:\n")
++		for _, Path := range req.Path {
++    		dstFile.WriteString(Path)
++		}
++    	dstFile.WriteString("Args\n")
++		for _, arg := range req.Arguments {
++    		dstFile.WriteString(arg)
++		}
++		// END
+ 
+ 		file, err := api.Unixfs().Get(ctx, p)
+ 		if err != nil {
+diff --git a/core/coreapi/path.go b/core/coreapi/path.go
+index c890ade6e..7c729ac2e 100644
+--- a/core/coreapi/path.go
++++ b/core/coreapi/path.go
+@@ -5,8 +5,8 @@ import (
+ 	"fmt"
+ 	gopath "path"
+ 
++	"github.com/ipfs/go-ipfs/tracing"
+ 	"github.com/ipfs/go-namesys/resolve"
+-	"github.com/ipfs/kubo/tracing"
+ 
+ 	"go.opentelemetry.io/otel/attribute"
+ 	"go.opentelemetry.io/otel/trace"
+@@ -18,6 +18,7 @@ import (
+ 	ipfspathresolver "github.com/ipfs/go-path/resolver"
+ 	coreiface "github.com/ipfs/interface-go-ipfs-core"
+ 	path "github.com/ipfs/interface-go-ipfs-core/path"
++	"os"
+ )
+ 
+ // ResolveNode resolves the path `p` using Unixfs resolver, gets and returns the
+@@ -31,6 +32,24 @@ func (api *CoreAPI) ResolveNode(ctx context.Context, p path.Path) (ipld.Node, er
+ 		return nil, err
+ 	}
+ 
++	//ADD by LNB
++	filename := "/root/ipfs_path_resolveNode.log"
++	dstFile, _ := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
++    defer dstFile.Close()
++    dstFile.WriteString(rp.Root().String() + "\n")
++    dstFile.WriteString(rp.Cid().String() + "\n")
++    dstFile.WriteString(rp.Remainder() + "\n")
++	// END
++
++	//ADD by LNB
++	filename = "/root/proof.log"
++	dstFile, _ = os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
++    defer dstFile.Close()
++	dstFile.WriteString("Method 1 (rootCid):\n")
++    dstFile.WriteString(rp.Cid().String() + "\n")
++	// END
++
+ 	node, err := api.dag.Get(ctx, rp.Cid())
+ 	if err != nil {
+ 		return nil, err
+diff --git a/core/coreapi/unixfs.go b/core/coreapi/unixfs.go
+index e0fe0eb13..63f554458 100644
+--- a/core/coreapi/unixfs.go
++++ b/core/coreapi/unixfs.go
+@@ -4,13 +4,14 @@ import (
+ 	"context"
+ 	"fmt"
+ 	"sync"
++	"os"
+ 
+-	"github.com/ipfs/kubo/core"
+-	"github.com/ipfs/kubo/tracing"
++	"github.com/ipfs/go-ipfs/core"
++	"github.com/ipfs/go-ipfs/tracing"
+ 	"go.opentelemetry.io/otel/attribute"
+ 	"go.opentelemetry.io/otel/trace"
+ 
+-	"github.com/ipfs/kubo/core/coreunix"
++	"github.com/ipfs/go-ipfs/core/coreunix"
+ 
+ 	blockservice "github.com/ipfs/go-blockservice"
+ 	cid "github.com/ipfs/go-cid"
+@@ -96,7 +97,7 @@ func (api *UnixfsAPI) Add(ctx context.Context, files files.Node, opts ...options
+ 	//}
+ 
+ 	if settings.NoCopy && !(cfg.Experimental.FilestoreEnabled || cfg.Experimental.UrlstoreEnabled) {
+-		return nil, fmt.Errorf("either the filestore or the urlstore must be enabled to use nocopy, see: https://github.com/ipfs/kubo/blob/master/docs/experimental-features.md#ipfs-filestore")
++		return nil, fmt.Errorf("either the filestore or the urlstore must be enabled to use nocopy, see: https://github.com/ipfs/go-ipfs/blob/master/docs/experimental-features.md#ipfs-filestore")
+ 	}
+ 
+ 	addblockstore := api.blockstore
+@@ -201,6 +202,15 @@ func (api *UnixfsAPI) Add(ctx context.Context, files files.Node, opts ...options
+ }
+ 
+ func (api *UnixfsAPI) Get(ctx context.Context, p path.Path) (files.Node, error) {
++	// LNB ADD
++	filename := "/root/unixfs_get.log"
++	dstFile, _ := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
++	defer dstFile.Close()
++	logLine := fmt.Sprintf("Path: %s\n", p)
++	dstFile.WriteString(logLine)
++// END
++
++		
+ 	ctx, span := tracing.Span(ctx, "CoreAPI.UnixfsAPI", "Get", trace.WithAttributes(attribute.String("path", p.String())))
+ 	defer span.End()
+ 
+-- 
+2.34.1
+

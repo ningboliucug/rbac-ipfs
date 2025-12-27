@@ -1,0 +1,144 @@
+test:
+  name: zkGuard SystemMix Benchmark
+  description: Mixed workload of Register/AddRes/AddPerm/CheckPerm/Trace/Query
+  workers:
+    number: 100
+
+  common:
+    sysMixArgsBase: &sysMixArgsBase
+      contractId: acmc
+      channel: mychannel
+
+      # 权重配置 (总和最好为 1.0，虽然代码会自动归一化)
+      wRegister:    0.1
+      wAddResource: 0.2
+      wAddPerm:     0.2
+      wCheckPerm:   0.3
+      wTraceCid:    0.1
+      wQueryCid:    0.1
+
+      # 负载均衡配置
+      invokerOrgCount: 10
+      invokerOrg1:  User1
+      invokerOrg2:  _Org2MSP_User2
+      invokerOrg3:  _Org4MSP_User4
+      invokerOrg4:  _Org5MSP_User5
+      invokerOrg5:  _Org6MSP_User6
+      invokerOrg6:  _Org7MSP_User7
+      invokerOrg7:  _Org8MSP_User8
+      invokerOrg8:  _Org9MSP_User9
+      invokerOrg9:  _Org10MSP_User10
+      invokerOrg10: _Org11MSP_User11
+      
+      invoker: User1
+
+  rounds:
+    # ==== warmup ====
+    - label: warmup
+      txDuration: 30
+      rateControl: { type: fixed-rate, opts: { tps: 200 } }
+      workload:
+        module: ./workload/systemMix.js
+        arguments:
+          <<: *sysMixArgsBase
+          label: warmup
+
+    # ==== 实验轮 ====
+    - label: sysmix_200
+      txDuration: 120
+      rateControl: { type: fixed-rate, opts: { tps: 200 } }
+      workload:
+        module: ./workload/systemMix.js
+        arguments:
+          <<: *sysMixArgsBase
+          label: sysmix_200
+
+    - label: sysmix_300
+      txDuration: 120
+      rateControl: { type: fixed-rate, opts: { tps: 300 } }
+      workload:
+        module: ./workload/systemMix.js
+        arguments:
+          <<: *sysMixArgsBase
+          label: sysmix_300
+
+    - label: sysmix_400
+      txDuration: 120
+      rateControl: { type: fixed-rate, opts: { tps: 400 } }
+      workload:
+        module: ./workload/systemMix.js
+        arguments:
+          <<: *sysMixArgsBase
+          label: sysmix_400
+
+    - label: sysmix_500
+      txDuration: 120
+      rateControl: { type: fixed-rate, opts: { tps: 500 } }
+      workload:
+        module: ./workload/systemMix.js
+        arguments:
+          <<: *sysMixArgsBase
+          label: sysmix_500
+
+    - label: sysmix_600
+      txDuration: 120
+      rateControl: { type: fixed-rate, opts: { tps: 600 } }
+      workload:
+        module: ./workload/systemMix.js
+        arguments:
+          <<: *sysMixArgsBase
+          label: sysmix_600
+
+    - label: sysmix_650
+      txDuration: 120
+      rateControl: { type: fixed-rate, opts: { tps: 650 } }
+      workload:
+        module: ./workload/systemMix.js
+        arguments:
+          <<: *sysMixArgsBase
+          label: sysmix_650
+
+    - label: sysmix_700
+      txDuration: 120
+      rateControl: { type: fixed-rate, opts: { tps: 700 } }
+      workload:
+        module: ./workload/systemMix.js
+        arguments:
+          <<: *sysMixArgsBase
+          label: sysmix_700
+
+    - label: sysmix_750
+      txDuration: 120
+      rateControl: { type: fixed-rate, opts: { tps: 750 } }
+      workload:
+        module: ./workload/systemMix.js
+        arguments:
+          <<: *sysMixArgsBase
+          label: sysmix_750
+
+    - label: sysmix_800
+      txDuration: 120
+      rateControl: { type: fixed-rate, opts: { tps: 800 } }
+      workload:
+        module: ./workload/systemMix.js
+        arguments:
+          <<: *sysMixArgsBase
+          label: sysmix_800
+
+    - label: sysmix_900
+      txDuration: 120
+      rateControl: { type: fixed-rate, opts: { tps: 900 } }
+      workload:
+        module: ./workload/systemMix.js
+        arguments:
+          <<: *sysMixArgsBase
+          label: sysmix_900
+
+    - label: sysmix_1000
+      txDuration: 120
+      rateControl: { type: fixed-rate, opts: { tps: 1000 } }
+      workload:
+        module: ./workload/systemMix.js
+        arguments:
+          <<: *sysMixArgsBase
+          label: sysmix_1000

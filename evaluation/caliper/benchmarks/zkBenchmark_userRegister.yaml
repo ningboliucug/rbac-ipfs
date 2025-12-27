@@ -1,0 +1,199 @@
+test:
+  name: zkGuard Register Benchmark
+  description: Caliper workload for UserRegister (updated for Hash ID)
+  workers:
+    number: 100
+
+  # 公共 arguments
+  common:
+    userRegisterArgs: &userRegisterArgs
+      contractId: acmc
+      channel: mychannel
+      # 对应 Go 合约函数名 (注意大小写，Go 中是 Register)
+      function: Register
+
+      # 多 invokerIdentity 负载均衡（10 个身份平均分配）
+      invokerOrgCount: 10
+      invokerOrg1:  User1
+      invokerOrg2:  _Org2MSP_User2
+      invokerOrg3:  _Org4MSP_User4
+      invokerOrg4:  _Org5MSP_User5
+      invokerOrg5:  _Org6MSP_User6
+      invokerOrg6:  _Org7MSP_User7
+      invokerOrg7:  _Org8MSP_User8
+      invokerOrg8:  _Org9MSP_User9
+      invokerOrg9:  _Org10MSP_User10
+      invokerOrg10: _Org11MSP_User11
+      
+      # 权重配置
+      wOrg1: 1
+      wOrg2: 1
+      wOrg3: 1
+      wOrg4: 1
+      wOrg5: 1
+      wOrg6: 1
+      wOrg7: 1
+      wOrg8: 1
+      wOrg9: 1
+      wOrg10: 1
+
+      # 兼容字段
+      invoker: User1
+
+      # 旧参数已移除 (pidPrefix, fixedHashAttr 等)
+
+  rounds:
+    # ==== warmup ====
+    - label: warmup
+      txDuration: 30
+      rateControl:
+        type: fixed-rate
+        opts:
+          tps: 200
+      workload:
+        module: ./workload/userRegister.js
+        arguments:
+          <<: *userRegisterArgs
+          label: warmup
+          offeredTps: 200
+
+    # ==== 实验轮：400 ~ 1100 TPS ====
+    - label: reg_400
+      txDuration: 120
+      rateControl: { type: fixed-rate, opts: { tps: 400 } }
+      workload:
+        module: ./workload/userRegister.js
+        arguments:
+          <<: *userRegisterArgs
+          label: reg_400
+          offeredTps: 400
+
+    - label: reg_500
+      txDuration: 120
+      rateControl: { type: fixed-rate, opts: { tps: 500 } }
+      workload:
+        module: ./workload/userRegister.js
+        arguments:
+          <<: *userRegisterArgs
+          label: reg_500
+          offeredTps: 500
+
+    - label: reg_600
+      txDuration: 120
+      rateControl: { type: fixed-rate, opts: { tps: 600 } }
+      workload:
+        module: ./workload/userRegister.js
+        arguments:
+          <<: *userRegisterArgs
+          label: reg_600
+          offeredTps: 600
+
+    - label: reg_650
+      txDuration: 120
+      rateControl: { type: fixed-rate, opts: { tps: 650 } }
+      workload:
+        module: ./workload/userRegister.js
+        arguments:
+          <<: *userRegisterArgs
+          label: reg_650
+          offeredTps: 650
+
+    - label: reg_675
+      txDuration: 120
+      rateControl: { type: fixed-rate, opts: { tps: 675 } }
+      workload:
+        module: ./workload/userRegister.js
+        arguments:
+          <<: *userRegisterArgs
+          label: reg_675
+          offeredTps: 675
+
+    - label: reg_700
+      txDuration: 120
+      rateControl: { type: fixed-rate, opts: { tps: 700 } }
+      workload:
+        module: ./workload/userRegister.js
+        arguments:
+          <<: *userRegisterArgs
+          label: reg_700
+          offeredTps: 700
+
+    - label: reg_725
+      txDuration: 120
+      rateControl: { type: fixed-rate, opts: { tps: 725 } }
+      workload:
+        module: ./workload/userRegister.js
+        arguments:
+          <<: *userRegisterArgs
+          label: reg_725
+          offeredTps: 725
+
+    - label: reg_750
+      txDuration: 120
+      rateControl: { type: fixed-rate, opts: { tps: 750 } }
+      workload:
+        module: ./workload/userRegister.js
+        arguments:
+          <<: *userRegisterArgs
+          label: reg_750
+          offeredTps: 750
+
+    - label: reg_775
+      txDuration: 120
+      rateControl: { type: fixed-rate, opts: { tps: 775 } }
+      workload:
+        module: ./workload/userRegister.js
+        arguments:
+          <<: *userRegisterArgs
+          label: reg_775
+          offeredTps: 775
+
+    - label: reg_800
+      txDuration: 120
+      rateControl: { type: fixed-rate, opts: { tps: 800 } }
+      workload:
+        module: ./workload/userRegister.js
+        arguments:
+          <<: *userRegisterArgs
+          label: reg_800
+          offeredTps: 800
+
+    - label: reg_850
+      txDuration: 120
+      rateControl: { type: fixed-rate, opts: { tps: 850 } }
+      workload:
+        module: ./workload/userRegister.js
+        arguments:
+          <<: *userRegisterArgs
+          label: reg_850
+          offeredTps: 850
+
+    - label: reg_900
+      txDuration: 120
+      rateControl: { type: fixed-rate, opts: { tps: 900 } }
+      workload:
+        module: ./workload/userRegister.js
+        arguments:
+          <<: *userRegisterArgs
+          label: reg_900
+          offeredTps: 900
+
+    - label: reg_1000
+      txDuration: 120
+      rateControl: { type: fixed-rate, opts: { tps: 1000 } }
+      workload:
+        module: ./workload/userRegister.js
+        arguments:
+          <<: *userRegisterArgs
+          label: reg_1000
+          offeredTps: 1000
+
+    - label: reg_1100
+      txDuration: 120
+      rateControl: { type: fixed-rate, opts: { tps: 1100 } }
+      workload:
+        module: ./workload/userRegister.js
+        arguments:
+          <<: *userRegisterArgs
+          label: reg_1100
+          offeredTps: 1100

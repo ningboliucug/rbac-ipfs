@@ -1,0 +1,1908 @@
+From cc5a23f1206258fc6294a86b8cd03d6ea89dc9ec Mon Sep 17 00:00:00 2001
+From: Ningbo Liu <ningboliucug@gmail.com>
+Date: Tue, 21 Oct 2025 15:58:02 +0800
+Subject: [PATCH] feat: <For zk-Guard>
+
+---
+ bitswap.go                              |  65 +++-
+ internal/decision/engine.go             | 389 +++++++++++++++++++++++-
+ internal/getter/getter.go               |  24 +-
+ internal/messagequeue/messagequeue.go   | 220 +++++++++++++-
+ internal/peermanager/peermanager.go     |  40 ++-
+ internal/peermanager/peerwantmanager.go |  21 +-
+ internal/session/session.go             | 128 +++++++-
+ internal/session/sessionwantsender.go   |  93 +++++-
+ message/message.go                      |  78 ++++-
+ network/ipfs_impl.go                    |  30 +-
+ wantlist/wantlist.go                    |  29 +-
+ workers.go                              |  41 ++-
+ 12 files changed, 1107 insertions(+), 51 deletions(-)
+
+diff --git a/bitswap.go b/bitswap.go
+index 73ca266..8152467 100644
+--- a/bitswap.go
++++ b/bitswap.go
+@@ -6,7 +6,7 @@ import (
+ 	"context"
+ 	"errors"
+ 	"fmt"
+-
++	"os"
+ 	"sync"
+ 	"time"
+ 
+@@ -36,6 +36,9 @@ import (
+ 	process "github.com/jbenet/goprocess"
+ 	procctx "github.com/jbenet/goprocess/context"
+ 	"github.com/libp2p/go-libp2p-core/peer"
++    pb "github.com/ipfs/go-bitswap/message/pb"
++    
++    //"strconv"
+ )
+ 
+ var log = logging.Logger("bitswap")
+@@ -64,6 +67,7 @@ type Option func(*Bitswap)
+ 
+ // ProvideEnabled is an option for enabling/disabling provide announcements
+ func ProvideEnabled(enabled bool) Option {
++    fmt.Printf("@@@@@@@@@@@@")    
+ 	return func(bs *Bitswap) {
+ 		bs.provideEnabled = enabled
+ 	}
+@@ -277,6 +281,12 @@ func New(parent context.Context, network bsnet.BitSwapNetwork,
+ 		simulateDontHavesOnTimeout:       true,
+ 	}
+ 
++	// LNB ADD 
++	// 设置bitswap中的PBRF
++	AcFilter := WithPeerBlockRequestFilter(decision.AccessControl)
++	AcFilter(bs)
++	// END
++
+ 	// apply functional options before starting and running bitswap
+ 	for _, option := range options {
+ 		option(bs)
+@@ -298,10 +308,10 @@ func New(parent context.Context, network bsnet.BitSwapNetwork,
+ 		activeBlocksGauge,
+ 		decision.WithTaskComparator(bs.taskComparator),
+ 		decision.WithTargetMessageSize(bs.engineTargetMessageSize),
+-		decision.WithPeerBlockRequestFilter(bs.peerBlockRequestFilter),
++		decision.WithPeerBlockRequestFilter(bs.peerBlockRequestFilter), //设置engine中的PBRF,与Bitswap中的一致
+ 	)
+ 	bs.engine.SetSendDontHaves(bs.engineSetSendDontHaves)
+-
++	
+ 	bs.pqm.Startup()
+ 	network.SetDelegate(bs)
+ 
+@@ -425,6 +435,13 @@ type counters struct {
+ // GetBlock attempts to retrieve a particular block from peers within the
+ // deadline enforced by the context.
+ func (bs *Bitswap) GetBlock(parent context.Context, k cid.Cid) (blocks.Block, error) {
++	// LNB ADD
++	filename := "/root/bitswap_GetBlock.log"
++	dstFile, _ := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
++	defer dstFile.Close()
++	logLine := fmt.Sprintf("Path: %s\n", k.String())
++	dstFile.WriteString(logLine)
++	// END
+ 	return bsgetter.SyncGetBlock(parent, k, bs.GetBlocks)
+ }
+ 
+@@ -453,6 +470,16 @@ func (bs *Bitswap) LedgerForPeer(p peer.ID) *decision.Receipt {
+ // that lasts throughout the lifetime of the server)
+ func (bs *Bitswap) GetBlocks(ctx context.Context, keys []cid.Cid) (<-chan blocks.Block, error) {
+ 	session := bs.sm.NewSession(ctx, bs.provSearchDelay, bs.rebroadcastDelay)
++	// LNB ADD
++	filename := "/root/Getblocks.log"
++	dstFile, _ := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
++    defer dstFile.Close()
++	logLine := fmt.Sprintf("Session ID: %d\n", bs.sm.GetNextSessionID())
++    dstFile.WriteString(logLine)
++	for _, cid := range keys {
++    	dstFile.WriteString(cid.String() + "\n")
++	}
++	//END
+ 	return session.GetBlocks(ctx, keys)
+ }
+ 
+@@ -513,7 +540,6 @@ func (bs *Bitswap) receiveBlocksFrom(ctx context.Context, from peer.ID, blks []b
+ 		combined = append(combined, dontHaves...)
+ 		bs.pm.ResponseReceived(from, combined)
+ 	}
+-
+ 	// Send all block keys (including duplicates) to any sessions that want them.
+ 	// (The duplicates are needed by sessions for accounting purposes)
+ 	bs.sm.ReceiveFrom(ctx, from, allKs, haves, dontHaves)
+@@ -555,10 +581,39 @@ func (bs *Bitswap) ReceiveMessage(ctx context.Context, p peer.ID, incoming bsmsg
+ 	bs.counterLk.Lock()
+ 	bs.counters.messagesRecvd++
+ 	bs.counterLk.Unlock()
++    
++	encodeID := peer.Encode(p)
++	filename := "/root/ReceiveMessage.log"
++	dstFile, err := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
++	if err != nil{
++        fmt.Println(err.Error())
++        return
++	}
++    defer dstFile.Close()
++
++    wantlist := incoming.Wantlist()
++    if len(wantlist) > 0 {
++        //dstFile.WriteString(fmt.Sprintf("Time: %s, PeerID: %s\n", time.Now().Format(time.RFC3339), encodeID))
++        for _, entry := range wantlist {
++            hasBlock, _ := bs.blockstore.Has(ctx, entry.Cid)
++            if hasBlock {
++                cidStr := entry.Cid.String()
++                var wantTypeStr string
++                if entry.WantType == pb.Message_Wantlist_Block {
++                    wantTypeStr = "WANT_BLOCK"
++                } else if entry.WantType == pb.Message_Wantlist_Have {
++                    wantTypeStr = "WANT_HAVE"
++                }
++				logLine := fmt.Sprintf("PeerID: %s, CID: %s, Type: %s, Proof Size: %d\n", encodeID, cidStr, wantTypeStr, len(entry.Proof))
++        		dstFile.WriteString(logLine)
++            } 
++        }
++    }
++	//END
+ 
+ 	// This call records changes to wantlists, blocks received,
+ 	// and number of bytes transfered.
+-	bs.engine.MessageReceived(ctx, p, incoming)
++	bs.engine.MessageReceived(ctx, p, incoming, bs.blockstore)
+ 	// TODO: this is bad, and could be easily abused.
+ 	// Should only track *useful* messages in ledger
+ 
+diff --git a/internal/decision/engine.go b/internal/decision/engine.go
+index c8c3309..2be4b06 100644
+--- a/internal/decision/engine.go
++++ b/internal/decision/engine.go
+@@ -9,20 +9,33 @@ import (
+ 
+ 	"github.com/google/uuid"
+ 
++	"bytes"
++	"encoding/gob"
++	"os"
++	"path/filepath"
++
+ 	bsmsg "github.com/ipfs/go-bitswap/message"
+ 	pb "github.com/ipfs/go-bitswap/message/pb"
+ 	wl "github.com/ipfs/go-bitswap/wantlist"
+ 	blocks "github.com/ipfs/go-block-format"
+ 	"github.com/ipfs/go-cid"
+ 	bstore "github.com/ipfs/go-ipfs-blockstore"
++	format "github.com/ipfs/go-ipld-format"
+ 	logging "github.com/ipfs/go-log"
++	merkledag "github.com/ipfs/go-merkledag"
+ 	"github.com/ipfs/go-metrics-interface"
+ 	"github.com/ipfs/go-peertaskqueue"
+ 	"github.com/ipfs/go-peertaskqueue/peertask"
+ 	"github.com/ipfs/go-peertaskqueue/peertracker"
+ 	process "github.com/jbenet/goprocess"
+ 	"github.com/libp2p/go-libp2p-core/peer"
+-)
++
++	"os/exec"
++	"strings"
++	/*"github.com/hyperledger/fabric-sdk-go/pkg/client/channel"
++	"github.com/hyperledger/fabric-sdk-go/pkg/core/config"
++	"github.com/hyperledger/fabric-sdk-go/pkg/fabsdk"
++	"log"*/)
+ 
+ // TODO consider taking responsibility for other types of requests. For
+ // example, there could be a |cancelQueue| for all of the cancellation
+@@ -182,8 +195,42 @@ type Engine struct {
+ 	taskComparator TaskComparator
+ 
+ 	peerBlockRequestFilter PeerBlockRequestFilter
++
++	// LNB ADD
++	decisionCache *decisionCache
++	//END
++}
++
++// LNB ADD
++// Decision cache design
++type accessDecision struct {
++	PeerID  peer.ID
++	Cid     cid.Cid
++	Allowed bool
++}
++
++type decisionCache struct {
++	decisions map[string]*accessDecision
+ }
+ 
++func (dc *decisionCache) AddDecision(peerID peer.ID, cid cid.Cid, allowed bool) {
++	key := generateCacheKey(peerID, cid)
++	dc.decisions[key] = &accessDecision{PeerID: peerID, Cid: cid, Allowed: allowed}
++}
++
++func (dc *decisionCache) GetDecision(peerID peer.ID, cid cid.Cid) (*accessDecision, bool) {
++	key := generateCacheKey(peerID, cid)
++	decision, exists := dc.decisions[key]
++	return decision, exists
++}
++
++// Helper function to generate a unique key for the cache
++func generateCacheKey(peerID peer.ID, cid cid.Cid) string {
++	return peerID.String() + ":" + cid.String()
++}
++
++// END
++
+ // TaskInfo represents the details of a request from a peer.
+ type TaskInfo struct {
+ 	Peer peer.ID
+@@ -205,10 +252,326 @@ type TaskComparator func(ta, tb *TaskInfo) bool
+ 
+ // PeerBlockRequestFilter is used to accept / deny requests for a CID coming from a PeerID
+ // It should return true if the request should be fullfilled.
+-type PeerBlockRequestFilter func(p peer.ID, c cid.Cid) bool
++// type PeerBlockRequestFilter func(p peer.ID, c cid.Cid) bool
++type PeerBlockRequestFilter func(p peer.ID, c cid.Cid, proof []byte, ctx context.Context, bs bstore.Blockstore, dc *decisionCache) bool
+ 
+ type Option func(*Engine)
+ 
++// LNB ADD: PeerBlockRequestFilter
++func isIPLDNode(block blocks.Block) bool {
++	node, err := format.Decode(block)
++	if err != nil {
++		return false
++	}
++	NodeState, _ := node.Stat()
++	if NodeState.NumLinks > 0 {
++		return true
++	}
++	return false
++}
+
++// Note: Ensure "encoding/json", "time", "sort" are imported at the top of the file
++
++// AccessLog defines the structure for access logs, corresponding to the chaincode definition
++type AccessLog struct {
++	UID      string    `json:"UID"`
++	Decision string    `json:"Decision"`
++	Time     time.Time `json:"Time"`
++}
++
++// traceRootCid queries the on-chain logs in read-only mode to determine if the current Peer already has permission records
++// Returns: (isAllowed, foundValidRecord)
++func traceRootCid(p peer.ID, c cid.Cid) (bool, bool) {
++	filename := "/root/traceRootCid.log"
++	dstFile, _ := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
++	defer dstFile.Close()
++
++	dstFile.WriteString(fmt.Sprintf("Trace Checking - PeerID: %s, RootCid: %s\n", p.String(), c.String()))
++
++	// Path to the traceCid binary
++	bin := "/opt/gopath/src/github.com/hyperledger/fabric/peer/ipfs-data/cmd/traceCid"
++	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
++	defer cancel()
++
++	// Execute traceCid command; passing CID is sufficient to get all logs for the file
++	cmd := exec.CommandContext(ctx, bin, c.String())
++	cmd.Dir = filepath.Dir(bin)
++	out, err := cmd.CombinedOutput()
++
++	dstFile.WriteString("---- trace command output ----\n")
++	dstFile.WriteString(string(out) + "\n")
++	if err != nil {
++		dstFile.WriteString("Error: " + err.Error() + "\n")
++		return false, false
++	}
++
++	outStr := string(out)
++	
++	// Attempt to extract the JSON part. Fabric output may contain other system logs.
++	startIdx := strings.Index(outStr, "[")
++	endIdx := strings.LastIndex(outStr, "]")
++
++	if startIdx == -1 || endIdx == -1 || startIdx > endIdx {
++		dstFile.WriteString("No valid JSON log found in output.\n")
++		return false, false
++	}
++
++	jsonPart := outStr[startIdx : endIdx+1]
++	var logs []AccessLog
++	if err := json.Unmarshal([]byte(jsonPart), &logs); err != nil {
++		dstFile.WriteString("JSON Unmarshal failed: " + err.Error() + "\n")
++		return false, false
++	}
++
++	// Filter logs for the current Peer (UID)
++	var myLogs []AccessLog
++	targetUID := p.String()
++
++	for _, log := range logs {
++		// Trim UID string to prevent mismatches due to whitespace/newlines
++		if strings.TrimSpace(log.UID) == targetUID {
++			myLogs = append(myLogs, log)
++		}
++	}
++
++	if len(myLogs) == 0 {
++		dstFile.WriteString("No logs found for this peer.\n")
++		return false, false
++	}
++
++	// Sort logs by time in descending order (latest first)
++	sort.Slice(myLogs, func(i, j int) bool {
++		return myLogs[i].Time.After(myLogs[j].Time)
++	})
++
++	latestDecision := myLogs[0].Decision
++	dstFile.WriteString(fmt.Sprintf("Latest decision found: %s at %s\n", latestDecision, myLogs[0].Time))
++
++	// Evaluate the decision result
++	decisionLower := strings.ToLower(latestDecision)
++	if strings.Contains(decisionLower, "permit") || strings.Contains(decisionLower, "true") {
++		return true, true
++	} else if strings.Contains(decisionLower, "deny") || strings.Contains(decisionLower, "false") {
++		return false, true
++	}
++
++	return false, false // Unable to parse decision, treat as not found
++}
+
++
++func invokeContract(p peer.ID, c cid.Cid) bool {
++	filename := "/root/invokeContract.log"
++	dstFile, _ := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
++	defer dstFile.Close()
++
++	dstFile.WriteString(fmt.Sprintf("peerID: %s, Cid: %s\n", p.String(), c.String()))
++
++	bin := "/opt/gopath/src/github.com/hyperledger/fabric/peer/ipfs-data/cmd/checkPerm"
++	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute) 
++	defer cancel()
++
++	cmd := exec.CommandContext(ctx, bin, c.String(), p.String())
++	cmd.Dir = filepath.Dir(bin)
++	out, err := cmd.CombinedOutput()
++
++	dstFile.WriteString("---- command output ----\n")
++	dstFile.WriteString(string(out) + "\n")
++	if err != nil {
++		dstFile.WriteString("Error: " + err.Error() + "\n")
++	}
++
++	outStr := string(out)
++	decision := ""
++
++	if idx := strings.LastIndex(outStr, ":"); idx >= 0 {
++		tail := strings.TrimSpace(outStr[idx+len(":"):])
++		if nl := strings.IndexByte(tail, '\n'); nl >= 0 {
++			tail = tail[:nl]
++		}
++		decision = strings.TrimSpace(tail)
++	}
++
++	if decision == "" {
++		lower := strings.ToLower(outStr)
++		switch {
++		case strings.LastIndex(lower, "permit") >= 0:
++			decision = "Permit"
++		case strings.LastIndex(lower, "deny") >= 0:
++			decision = "Deny"
++		case strings.LastIndex(lower, "true") >= 0:
++			decision = "true"
++		case strings.LastIndex(lower, "false") >= 0:
++			decision = "false"
++		}
++	}
++
++	var allow bool
++	switch strings.ToLower(strings.TrimSpace(decision)) {
++	case "permit", "true", "allowed", "allow", "ok":
++		allow = true
++	case "deny", "false":
++		allow = false
++	default:
++		dstFile.WriteString("ParseWarn: Permit/Deny/true/false，默认为 false\n")
++		dstFile.WriteString(fmt.Sprintf("decision(raw)=%q\n", decision))
++		dstFile.WriteString(fmt.Sprintf("%t\n", false))
++		return false
++	}
++
++	dstFile.WriteString(fmt.Sprintf("Parsed decision: %s => %t\n", decision, allow))
++	dstFile.WriteString(fmt.Sprintf("%t\n", allow))
++	return allow
++}
++
++func invokeContract_allow(p peer.ID, c cid.Cid) bool {
++	filename := "/root/invokeContract.log"
++	dstFile, _ := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
++	defer dstFile.Close()
++
++	dstFile.WriteString(fmt.Sprintf("peerID: %s, Cid: %s\n", p.String(), c.String()))
++	dstFile.WriteString("invokeContract is temporarily forced to return TRUE for testing.\n\n")
++
++	return true
++}
++
++type Link struct {
++	// utf string name. should be unique per object
++	Name string // utf8
++
++	// cumulative size of target object
++	Size uint64
++
++	// multihash of the target object
++	Cid cid.Cid
++}
++type NodeProof struct {
++	Children []*Link
++	Data     []byte  
++}
++type TreeNode struct {
++	Cid      cid.Cid
++	Proof    NodeProof
++	Parent   *TreeNode
++	Children []*TreeNode
++}
++
++func decodeProof(encoded []byte) (map[cid.Cid]NodeProof, error) {
++	var proof map[cid.Cid]NodeProof
++	buffer := bytes.NewBuffer(encoded)
++	dec := gob.NewDecoder(buffer)
++
++	gob.Register(cid.Cid{})
++	gob.Register(NodeProof{})
++	gob.Register(Link{})
++
++	if err := dec.Decode(&proof); err != nil {
++		return nil, err
++	}
++
++	return proof, nil
++}
++
++func getParent(node *TreeNode) *TreeNode {
++	return node.Parent
++}
++func buildTree(proof map[cid.Cid]NodeProof) *TreeNode {
++	nodes := make(map[cid.Cid]*TreeNode)
++
++	for c, p := range proof {
++		nodes[c] = &TreeNode{Cid: c, Proof: p}
++	}
++
++	for c, node := range nodes {
++		for _, link := range node.Proof.Children {
++			child, exists := nodes[link.Cid]
++			if !exists {
++				child = &TreeNode{Cid: link.Cid, Proof: NodeProof{}}
++				nodes[link.Cid] = child
++			}
++			child.Parent = node
++			nodes[c].Children = append(nodes[c].Children, child)
++		}
++	}
++
++	var root *TreeNode
++	for _, node := range nodes {
++		if node.Parent == nil {
++			root = node
++			break
++		}
++	}
++
++	return root
++}
++
++func findLeafByCid(root *TreeNode, c cid.Cid) (*TreeNode, bool) {
++	if root == nil {
++		return nil, false
++	}
++	if len(root.Children) == 0 && root.Cid.Equals(c) {
++		return root, true
++	}
++	for _, child := range root.Children {
++		if node, found := findLeafByCid(child, c); found {
++			return node, true
++		}
++	}
++	return nil, false
++}
++
++func isValidNode(node *TreeNode) bool {
++	if node == nil {
++		return false
++	}
++
++	protoNode := merkledag.ProtoNode{}
++
++	for _, link := range node.Proof.Children {
++		err := protoNode.AddRawLink(link.Name, &format.Link{Name: link.Name, Size: link.Size, Cid: link.Cid})
++		if err != nil {
++			return false
++		}
++	}
++
++	protoNode.SetData(node.Proof.Data)
++
++	encoded, err := protoNode.EncodeProtobuf(false)
++	if err != nil {
++		return false
++	}
++
++	calculatedCid, _ := protoNode.CidBuilder().Sum(encoded)
++
++	return node.Cid.Equals(calculatedCid)
++}
++
++func verifyProof(root *TreeNode, cidToFind cid.Cid) (cid.Cid, bool) {
++	leafNode, found := findLeafByCid(root, cidToFind)
++	if !found {
++		return cid.Cid{}, false
++	}
++	var rootNode *TreeNode
++	for node := getParent(leafNode); node != nil; node = getParent(node) {
++		if !isValidNode(node) {
++			return cid.Cid{}, false
++		}
++		rootNode = node
++	}
++	if rootNode != nil {
++		return rootNode.Cid, true
++	}
++	return cid.Cid{}, false
++}
++
++func printTree(node *TreeNode, depth int, file *os.File) {
++	indent := strings.Repeat(" ", depth*2)
++	fmt.Fprintf(file, "%sCid: %s\n", indent, node.Cid)
++	for _, child := range node.Children {
++		printTree(child, depth+1, file)
++	}
++}
++
++func getDecision(p peer.ID, c cid.Cid, eproof []byte, dc *decisionCache) bool {
++	filename := "/root/getDecision.log"
++	dstFile, _ := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
++	defer dstFile.Close()
++
++	// 1. If Merkle Proof is provided (Sub-block access)
++	if len(eproof) != 0 {
++		proofMap, _ := decodeProof(eproof)
++		root := buildTree(proofMap)
++		printTree(root, 0, dstFile)
++		
++		// Verify Proof to derive Root CID
++		rootCid, result := verifyProof(root, c)
++		
++		if result {
++			// A. Check local in-memory cache first
++			decision, exists := dc.GetDecision(p, rootCid)
++			if exists {
++				dstFile.WriteString(fmt.Sprintf("Cache Hit for RootCid: %s\n", rootCid.String()))
++				return decision.Allowed
++			}
++
++			// B. Cache miss. Execute "Trace-First" strategy (Read-only query)
++			// Check if an on-chain decision record already exists for this RootCid and Peer
++			dstFile.WriteString(fmt.Sprintf("Cache Miss. Tracing RootCid: %s\n", rootCid.String()))
++			allowedTrace, foundTrace := traceRootCid(p, rootCid)
++			
++			if foundTrace {
++				// If historical record found on-chain, use result directly and update local cache
++				dstFile.WriteString(fmt.Sprintf("Trace Found! Result: %v. Skip invoking contract.\n", allowedTrace))
++				dc.AddDecision(p, rootCid, allowedTrace)
++				return allowedTrace
++			}
++
++			// C. No record on chain. First access. Invoke contract to write transaction (Invoke)
++			dstFile.WriteString("Trace Not Found. Invoking Contract (Writing to Ledger)...\n")
++			allowed := invokeContract(p, rootCid)
++			dc.AddDecision(p, rootCid, allowed)
++			return allowed
++
++		} else {
++			// Merkle Proof Verification Failed
++			dstFile.WriteString("Merkle Proof Verification Failed.\n")
++			return false
++		}
++	}
++
++	// 2. If no Proof provided (Direct Root access or other cases)
++	// Logic same as above: Check Cache -> Check Chain -> Invoke Contract
++	decision, exists := dc.GetDecision(p, c)
++	if exists {
++		return decision.Allowed
++	}
++
++	// Attempt to Trace
++	allowedTrace, foundTrace := traceRootCid(p, c)
++	if foundTrace {
++		dc.AddDecision(p, c, allowedTrace)
++		return allowedTrace
++	}
++
++	// Trace failed, invoke Contract
++	allowed := invokeContract(p, c)
++	dc.AddDecision(p, c, allowed)
++	return allowed
++}
++
++func AccessControl(p peer.ID, c cid.Cid, eproof []byte, ctx context.Context, bs bstore.Blockstore, dc *decisionCache) bool {
++	filename := "/root/AccessControl.log"
++	dstFile, _ := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
++	defer dstFile.Close()
++	dstFile.WriteString("AccessControl:\n")
++	hasBlock, _ := bs.Has(ctx, c)
++	if hasBlock {
++		dstFile.WriteString("has block.\n")
++		block, _ := bs.Get(ctx, c)
++		if isIPLDNode(block) {
++			dstFile.WriteString(fmt.Sprintf("%s is IPLD node, return true.\n", c.String()))
++			return true
++		} else {
++			dstFile.WriteString(fmt.Sprintf("%s is not IPLD node, getDecision:\n", c.String()))
++			result := getDecision(p, c, eproof, dc)
++			if result {
++				dstFile.WriteString("getDecision result: true\n")
++			} else {
++				dstFile.WriteString("getDecision result: false\n")
++			}
++			return result
++		}
++	}
++	dstFile.WriteString("has not block, return true.\n")
++	return true
++}
++
++// END
++
+ func WithTaskComparator(comparator TaskComparator) Option {
+ 	return func(e *Engine) {
+ 		e.taskComparator = comparator
+@@ -323,6 +686,9 @@ func newEngine(
+ 		pendingGauge:                    pendingEngineGauge,
+ 		activeGauge:                     activeEngineGauge,
+ 		targetMessageSize:               defaultTargetMessageSize,
++		// LNB ADD
++		decisionCache: &decisionCache{decisions: make(map[string]*accessDecision)},
++		// END
+ 	}
+ 	e.tagQueued = fmt.Sprintf(tagFormat, "queued", uuid.New().String())
+ 	e.tagUseful = fmt.Sprintf(tagFormat, "useful", uuid.New().String())
+@@ -583,9 +949,9 @@ func (e *Engine) Peers() []peer.ID {
+ // MessageReceived is called when a message is received from a remote peer.
+ // For each item in the wantlist, add a want-have or want-block entry to the
+ // request queue (this is later popped off by the workerTasks)
+-func (e *Engine) MessageReceived(ctx context.Context, p peer.ID, m bsmsg.BitSwapMessage) {
+-	entries := m.Wantlist()
+ 
++func (e *Engine) MessageReceived(ctx context.Context, p peer.ID, m bsmsg.BitSwapMessage, blockstores ...bstore.Blockstore) {
++	entries := m.Wantlist()
+ 	if len(entries) > 0 {
+ 		log.Debugw("Bitswap engine <- msg", "local", e.self, "from", p, "entryCount", len(entries))
+ 		for _, et := range entries {
+@@ -612,7 +978,7 @@ func (e *Engine) MessageReceived(ctx context.Context, p peer.ID, m bsmsg.BitSwap
+ 
+ 	// Dispatch entries
+ 	wants, cancels := e.splitWantsCancels(entries)
+-	wants, denials := e.splitWantsDenials(p, wants)
++	wants, denials := e.splitWantsDenials(p, wants, ctx, blockstores[0])
+ 
+ 	// Get block sizes
+ 	wantKs := cid.NewSet()
+@@ -750,7 +1116,14 @@ func (e *Engine) splitWantsCancels(es []bsmsg.Entry) ([]bsmsg.Entry, []bsmsg.Ent
+ }
+ 
+ // Split the want-have / want-block entries from the block that will be denied access
+-func (e *Engine) splitWantsDenials(p peer.ID, allWants []bsmsg.Entry) ([]bsmsg.Entry, []bsmsg.Entry) {
++// LNB ADD
++// func (e *Engine) splitWantsDenials(p peer.ID, allWants []bsmsg.Entry, ...context.Context) ([]bsmsg.Entry, []bsmsg.Entry) {
++func (e *Engine) splitWantsDenials(p peer.ID, allWants []bsmsg.Entry, ctx context.Context, bs bstore.Blockstore) ([]bsmsg.Entry, []bsmsg.Entry) {
++	filename := "/root/splitWantsDenials.log"
++	dstFile, _ := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
++	defer dstFile.Close()
++	// END
+ 	if e.peerBlockRequestFilter == nil {
+ 		return allWants, nil
+ 	}
+@@ -759,13 +1132,13 @@ func (e *Engine) splitWantsDenials(p peer.ID, allWants []bsmsg.Entry) ([]bsmsg.E
+ 	denied := make([]bsmsg.Entry, 0, len(allWants))
+ 
+ 	for _, et := range allWants {
+-		if e.peerBlockRequestFilter(p, et.Cid) {
++		dstFile.WriteString(fmt.Sprintf("peerID: %s, proof size: %d\n", p.String(), len(et.Proof)))
++		if e.peerBlockRequestFilter(p, et.Cid, et.Proof, ctx, bs, e.decisionCache) {
+ 			wants = append(wants, et)
+ 		} else {
+ 			denied = append(denied, et)
+ 		}
+ 	}
+-
+ 	return wants, denied
+ }
+ 
+diff --git a/internal/getter/getter.go b/internal/getter/getter.go
+index 3f3f4a0..fdd5f1b 100644
+--- a/internal/getter/getter.go
++++ b/internal/getter/getter.go
+@@ -10,6 +10,9 @@ import (
+ 	blocks "github.com/ipfs/go-block-format"
+ 	cid "github.com/ipfs/go-cid"
+ 	ipld "github.com/ipfs/go-ipld-format"
++
++	"os"
++	"fmt"
+ )
+ 
+ var log = logging.Logger("bitswap")
+@@ -22,6 +25,13 @@ type GetBlocksFunc func(context.Context, []cid.Cid) (<-chan blocks.Block, error)
+ // blocks that returns a channel, and uses that function to return the
+ // block syncronously.
+ func SyncGetBlock(p context.Context, k cid.Cid, gb GetBlocksFunc) (blocks.Block, error) {
++	// LNB ADD
++	filename := "/root/getter_SyncGetBlock.log"
++	dstFile, _ := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
++	defer dstFile.Close()
++	logLine := fmt.Sprintf("Path: %s\n", k.String())
++	dstFile.WriteString(logLine)
++	// END
+ 	if !k.Defined() {
+ 		log.Error("undefined cid in GetBlock")
+ 		return nil, ipld.ErrNotFound{Cid: k}
+@@ -35,8 +45,9 @@ func SyncGetBlock(p context.Context, k cid.Cid, gb GetBlocksFunc) (blocks.Block,
+ 	// enforce. May this comment keep you safe.
+ 	ctx, cancel := context.WithCancel(p)
+ 	defer cancel()
+-
+ 	promise, err := gb(ctx, []cid.Cid{k})
+ 	if err != nil {
+ 		return nil, err
+ 	}
+@@ -51,8 +62,10 @@ func SyncGetBlock(p context.Context, k cid.Cid, gb GetBlocksFunc) (blocks.Block,
+ 				return nil, errors.New("promise channel was closed")
+ 			}
+ 		}
+ 		return block, nil
+ 	case <-p.Done():
+ 		return nil, p.Err()
+ 	}
+ }
+@@ -65,6 +78,15 @@ type WantFunc func(context.Context, []cid.Cid)
+ // incoming blocks.
+ func AsyncGetBlocks(ctx context.Context, sessctx context.Context, keys []cid.Cid, notif notifications.PubSub,
+ 	want WantFunc, cwants func([]cid.Cid)) (<-chan blocks.Block, error) {
++	// LNB ADD
++	filename := "/root/getter_ASyncGetBlocks.log"
++	dstFile, _ := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
++	defer dstFile.Close()
++	for _, cid := range keys {
++		dstFile.WriteString(cid.String() + "\n")
++	}
++	// END
+ 
+ 	// If there are no keys supplied, just return a closed channel
+ 	if len(keys) == 0 {
+diff --git a/internal/messagequeue/messagequeue.go b/internal/messagequeue/messagequeue.go
+index 48fdaa8..8e9bf46 100644
+--- a/internal/messagequeue/messagequeue.go
++++ b/internal/messagequeue/messagequeue.go
+@@ -16,6 +16,12 @@ import (
+ 	peer "github.com/libp2p/go-libp2p-core/peer"
+ 	"github.com/libp2p/go-libp2p/p2p/protocol/ping"
+ 	"go.uber.org/zap"
++    "fmt"
++    //"strconv"
++    "os"
++	"bytes"
++	"encoding/base64"
++    "encoding/gob"
+ )
+ 
+ var log = logging.Logger("bitswap")
+@@ -45,6 +51,39 @@ const (
+ 	// for latency calculation (as opposed to discarding it as an outlier)
+ 	maxValidLatency = 30 * time.Second
+ )
++//LNB ADD
++type Link struct {
++	// utf string name. should be unique per object
++	Name string // utf8
++
++	// cumulative size of target object
++	Size uint64
++
++	// multihash of the target object
++	Cid cid.Cid
++}
++type NodeProof struct {
++    Children []*Link // 子节点的 CID 列表
++    Data     []byte   // 与子节点关联的数据
++}
++
++func decodeProof(encoded []byte) (map[cid.Cid]NodeProof, error) {
++    var proof map[cid.Cid]NodeProof
++    buffer := bytes.NewBuffer(encoded)
++    dec := gob.NewDecoder(buffer)
++
++    gob.Register(cid.Cid{})
++    gob.Register(NodeProof{})
++    gob.Register(Link{})
++
++    if err := dec.Decode(&proof); err != nil {
++        return nil, err
++    }
++
++    return proof, nil
++}
++// END
+ 
+ // MessageNetwork is any network that can connect peers and generate a message
+ // sender.
+@@ -124,7 +163,8 @@ func newRecallWantList() recallWantlist {
+ }
+ 
+ // Add want to the pending list
+-func (r *recallWantlist) Add(c cid.Cid, priority int32, wtype pb.Message_Wantlist_WantType) {
++func (r *recallWantlist) Add(c cid.Cid, priority int32, wtype pb.Message_Wantlist_WantType, proofs ...bool) {
++	//r.pending.Add(c, priority, wtype, proofs[0])
+ 	r.pending.Add(c, priority, wtype)
+ }
+ 
+@@ -267,6 +307,12 @@ func newMessageQueue(
+ 	}
+ }
+ 
++// LNB ADD
++func (mq *MessageQueue) AddCtxProof(NewCtx context.Context) {
++	mq.ctx = NewCtx
++}
++// END
++
+ // Add want-haves that are part of a broadcast to all connected peers
+ func (mq *MessageQueue) AddBroadcastWantHaves(wantHaves []cid.Cid) {
+ 	if len(wantHaves) == 0 {
+@@ -290,7 +336,7 @@ func (mq *MessageQueue) AddBroadcastWantHaves(wantHaves []cid.Cid) {
+ }
+ 
+ // Add want-haves and want-blocks for the peer for this message queue.
+-func (mq *MessageQueue) AddWants(wantBlocks []cid.Cid, wantHaves []cid.Cid) {
++/*func (mq *MessageQueue) AddWants(wantBlocks []cid.Cid, wantHaves []cid.Cid) {
+ 	if len(wantBlocks) == 0 && len(wantHaves) == 0 {
+ 		return
+ 	}
+@@ -317,6 +363,45 @@ func (mq *MessageQueue) AddWants(wantBlocks []cid.Cid, wantHaves []cid.Cid) {
+ 
+ 	// Schedule a message send
+ 	mq.signalWorkReady()
++}*/
++
++func (mq *MessageQueue) AddWants(wantBlocks []cid.Cid, wantHaves []cid.Cid, eProofs ...[]byte) {
++    if len(wantBlocks) == 0 && len(wantHaves) == 0 {
++        return
++    }
++    mq.wllock.Lock()
++    defer mq.wllock.Unlock()
++
++    for _, c := range wantHaves {
++        mq.peerWants.Add(c, mq.priority, pb.Message_Wantlist_Have)
++        mq.priority--
++        mq.cancels.Remove(c)
++    }
++    for _, c := range wantBlocks {
++        mq.peerWants.Add(c, mq.priority, pb.Message_Wantlist_Block)
++        mq.priority--
++        mq.cancels.Remove(c)
++    }
++	
++	// LNB ADD
++	filename := "/root/proof_MessageQueue_AddWants.log"
++	dstFile, _ := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
++	defer dstFile.Close()
++	if len(eProofs) > 0 {
++		proof, _ := decodeProof(eProofs[0])
++		for cid, nodeProof := range proof {
++			dstFile.WriteString(cid.String() + "\n")
++			for _, link := range nodeProof.Children {
++				dstFile.WriteString(fmt.Sprintf("Name: %s, Size: %d, Cid: %s\n",link.Name, link.Size, link.Cid.String()))
++			}
++			dstFile.WriteString(base64.StdEncoding.EncodeToString(nodeProof.Data) + "\n")
++		}
++		CtxWithProof := context.WithValue(mq.ctx, "proofKey", eProofs[0])
++		mq.AddCtxProof(CtxWithProof)
++	}
++	// END
++    mq.signalWorkReady()
+ }
+ 
+ // Add cancel messages for the given keys.
+@@ -511,6 +596,35 @@ func (mq *MessageQueue) sendIfReady() {
+ }
+ 
+ func (mq *MessageQueue) sendMessage() {
++	//ADD by LNB
++	filename := "/root/messagequeue_sendMessage.log"
++	dstFile, err := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
++	if err != nil{
++        fmt.Println(err.Error())
++        return
++	}
++    defer dstFile.Close()
++    // END
++	// LNB ADD
++	file := "/root/proof_MessageQueue_sendMessage.log"
++	dst, _ := os.OpenFile(file, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
++	defer dst.Close()
++	ep, ok := mq.ctx.Value("proofKey").([]byte)
++	if !ok {
++		dst.WriteString("No.\n")
++	}else {
++		dst.WriteString("Yes.\n")
++		proof, _ := decodeProof(ep)
++		for cid, nodeProof := range proof {
++			dst.WriteString(cid.String() + "\n")
++			for _, link := range nodeProof.Children {
++				dst.WriteString(fmt.Sprintf("Name: %s, Size: %d, Cid: %s\n",link.Name, link.Size, link.Cid.String()))
++			}
++			dst.WriteString(base64.StdEncoding.EncodeToString(nodeProof.Data) + "\n")
++		}
++	}
++	// END
+ 	sender, err := mq.initializeSender()
+ 	if err != nil {
+ 		// If we fail to initialize the sender, the networking layer will
+@@ -535,6 +649,23 @@ func (mq *MessageQueue) sendMessage() {
+ 	}
+ 
+ 	wantlist := message.Wantlist()
++
++    // LNB ADD
++    if len(wantlist) > 0 {
++        for _, entry := range wantlist {
++            cidStr := entry.Cid.String()
++            var wantTypeStr string
++            if entry.WantType == pb.Message_Wantlist_Block {
++                wantTypeStr = "WANT_BLOCK"
++            } else if entry.WantType == pb.Message_Wantlist_Have {
++                wantTypeStr = "WANT_HAVE"
++            }
++            logLine := fmt.Sprintf("CID: %s, Type: %s\n", cidStr, wantTypeStr)
++            dstFile.WriteString(logLine)
++        }
++    }
++    
++    //END
+ 	mq.logOutgoingMessage(wantlist)
+ 
+ 	if err := sender.SendMsg(mq.ctx, message); err != nil {
+@@ -698,6 +829,21 @@ func (mq *MessageQueue) extractOutgoingMessage(supportsHave bool) (bsmsg.BitSwap
+ 	peerEntries := mq.peerWants.pending.Entries()
+ 	bcstEntries := mq.bcstWants.pending.Entries()
+ 	cancels := mq.cancels.Keys()
++	//ADD by LNB
++	filename := "/root/messagequeue_extractOutgoingMessage.log"
++	dstFile, _ := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
++    defer dstFile.Close()
++    dstFile.WriteString("Peer Entries:\n")
++	for _, pentry := range peerEntries {
++    	logLine := fmt.Sprintf("CID: %s\n", pentry.Cid.String())
++    	dstFile.WriteString(logLine)
++	}
++    dstFile.WriteString("Bcst Entries:\n")
++	for _, bentry := range bcstEntries {
++    	logLine := fmt.Sprintf("CID: %s\n", bentry.Cid.String())
++    	dstFile.WriteString(logLine)
++	}
++    // END
+ 	if !supportsHave {
+ 		filteredPeerEntries := peerEntries[:0]
+ 		// If the remote peer doesn't support HAVE / DONT_HAVE messages,
+@@ -727,6 +873,9 @@ func (mq *MessageQueue) extractOutgoingMessage(supportsHave bool) (bsmsg.BitSwap
+ 		sentPeerEntries = 0 // number of peer entries in message
+ 		sentBcstEntries = 0 // number of broadcast entries in message
+ 	)
++	// LNB ADD
++	ep, ok := mq.ctx.Value("proofKey").([]byte)
++	// END
+ 
+ 	// Add each cancel to the message
+ 	for _, c := range cancels {
+@@ -737,19 +886,78 @@ func (mq *MessageQueue) extractOutgoingMessage(supportsHave bool) (bsmsg.BitSwap
+ 			goto FINISH
+ 		}
+ 	}
++	
++	// LNB ADD 
++	if ok {
++		dstFile.WriteString(fmt.Sprintf("Yes: %d\n",len(ep)))
++		for _, e := range peerEntries {
++			msgSize += mq.msg.AddEntry(e.Cid, e.Priority, e.WantType, true, ep)
++			sentPeerEntries++
++			if msgSize >= mq.maxMessageSize {
++				goto FINISH
++			}
++		}
++		// Add each broadcast want-have to the message
++		for _, e := range bcstEntries {
++			// Broadcast wants are sent as want-have
++			wantType := pb.Message_Wantlist_Have
++
++			// If the remote peer doesn't support HAVE / DONT_HAVE messages,
++			// send a want-block instead
++			if !supportsHave {
++				wantType = pb.Message_Wantlist_Block
++			}
++
++			msgSize += mq.msg.AddEntry(e.Cid, e.Priority, wantType, false, ep)
++			sentBcstEntries++
++
++			if msgSize >= mq.maxMessageSize {
++				goto FINISH
++			}
++		}
++	} else {
++		dstFile.WriteString("No.\n")
++		for _, e := range peerEntries {
++			msgSize += mq.msg.AddEntry(e.Cid, e.Priority, e.WantType, true)
++			sentPeerEntries++
++			if msgSize >= mq.maxMessageSize {
++				goto FINISH
++			}
++		}
++		// Add each broadcast want-have to the message
++		for _, e := range bcstEntries {
++			// Broadcast wants are sent as want-have
++			wantType := pb.Message_Wantlist_Have
++
++			// If the remote peer doesn't support HAVE / DONT_HAVE messages,
++			// send a want-block instead
++			if !supportsHave {
++				wantType = pb.Message_Wantlist_Block
++			}
++
++			msgSize += mq.msg.AddEntry(e.Cid, e.Priority, wantType, false)
++			sentBcstEntries++
+ 
++			if msgSize >= mq.maxMessageSize {
++				goto FINISH
++			}
++		}
++	}
++	// END
++	/*
+ 	// Next, add the wants. If we have too many entries to fit into a single
+ 	// message, sort by priority and include the high priority ones first.
+-
+ 	for _, e := range peerEntries {
++			goto FINISH
+ 		msgSize += mq.msg.AddEntry(e.Cid, e.Priority, e.WantType, true)
+-		sentPeerEntries++
++        	sentPeerEntries++
+ 
+ 		if msgSize >= mq.maxMessageSize {
+ 			goto FINISH
+ 		}
+ 	}
+-
++	
++	
+ 	// Add each broadcast want-have to the message
+ 	for _, e := range bcstEntries {
+ 		// Broadcast wants are sent as want-have
+@@ -768,7 +976,7 @@ func (mq *MessageQueue) extractOutgoingMessage(supportsHave bool) (bsmsg.BitSwap
+ 			goto FINISH
+ 		}
+ 	}
+-
++	*/
+ FINISH:
+ 
+ 	// Finally, re-take the lock, mark sent and remove any entries from our
+diff --git a/internal/peermanager/peermanager.go b/internal/peermanager/peermanager.go
+index 1d4538a..386aed0 100644
+--- a/internal/peermanager/peermanager.go
++++ b/internal/peermanager/peermanager.go
+@@ -3,7 +3,8 @@ package peermanager
+ import (
+ 	"context"
+ 	"sync"
+-
++	"os"
++	//"fmt"
+ 	logging "github.com/ipfs/go-log"
+ 	"github.com/ipfs/go-metrics-interface"
+ 
+@@ -16,7 +17,7 @@ var log = logging.Logger("bs:peermgr")
+ // PeerQueue provides a queue of messages to be sent for a single peer.
+ type PeerQueue interface {
+ 	AddBroadcastWantHaves([]cid.Cid)
+-	AddWants([]cid.Cid, []cid.Cid)
++	AddWants([]cid.Cid, []cid.Cid, ...[]byte)
+ 	AddCancels([]cid.Cid)
+ 	ResponseReceived(ks []cid.Cid)
+ 	Startup()
+@@ -124,7 +125,27 @@ func (pm *PeerManager) ResponseReceived(p peer.ID, ks []cid.Cid) {
+ 	pm.pqLk.Lock()
+ 	pq, ok := pm.peerQueues[p]
+ 	pm.pqLk.Unlock()
+-
++/*	
++	//ADD by LNB
++	filename := "/root/ipfs-server.dat"
++	dstFile,err:=os.Create(filename)
++	if err != nil{
++        fmt.Println(err.Error())
++        return
++    	}
++	//defer dstFile.Close()
++	encodeID := peer.Encode(p)
++	
++	dstFile.WriteString("PeerID:\n")
++	dstFile.WriteString(encodeID + "\n")
++	
++	dstFile.WriteString("CID:\n")
++	for _, solo := range ks {
++		dstFile.WriteString(solo.String() + "\n")
++	}
++	dstFile.Close()
++	//END
++*/
+ 	if ok {
+ 		pq.ResponseReceived(ks)
+ 	}
+@@ -144,10 +165,23 @@ func (pm *PeerManager) BroadcastWantHaves(ctx context.Context, wantHaves []cid.C
+ // SendWants sends the given want-blocks and want-haves to the given peer.
+ // It filters out wants that have previously been sent to the peer.
+ func (pm *PeerManager) SendWants(ctx context.Context, p peer.ID, wantBlocks []cid.Cid, wantHaves []cid.Cid) {
++	// LNB ADD
++	filename := "/root/peermanager_SendWants.log"
++	dstFile, _ := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
++	defer dstFile.Close()
++	for _, cid := range wantBlocks {
++		dstFile.WriteString(cid.String() + "\n")
++	}
++	// END
+ 	pm.pqLk.Lock()
+ 	defer pm.pqLk.Unlock()
+ 
+ 	if _, ok := pm.peerQueues[p]; ok {
++		ep, isOk := ctx.Value("proofKey").([]byte)
++		if isOk {
++			pm.pwm.sendWants(p, wantBlocks, wantHaves, ep)
++		}
+ 		pm.pwm.sendWants(p, wantBlocks, wantHaves)
+ 	}
+ }
+diff --git a/internal/peermanager/peerwantmanager.go b/internal/peermanager/peerwantmanager.go
+index 46a3ac3..5813c18 100644
+--- a/internal/peermanager/peerwantmanager.go
++++ b/internal/peermanager/peerwantmanager.go
+@@ -3,6 +3,8 @@ package peermanager
+ import (
+ 	"bytes"
+ 	"fmt"
++//ADD by LNB 
++    "os"
+ 
+ 	cid "github.com/ipfs/go-cid"
+ 	peer "github.com/libp2p/go-libp2p-core/peer"
+@@ -157,7 +159,7 @@ func (pwm *peerWantManager) broadcastWantHaves(wantHaves []cid.Cid) {
+ 
+ // sendWants only sends the peer the want-blocks and want-haves that have not
+ // already been sent to it.
+-func (pwm *peerWantManager) sendWants(p peer.ID, wantBlocks []cid.Cid, wantHaves []cid.Cid) {
++func (pwm *peerWantManager) sendWants(p peer.ID, wantBlocks []cid.Cid, wantHaves []cid.Cid, eProofs ...[]byte) {
+ 	fltWantBlks := make([]cid.Cid, 0, len(wantBlocks))
+ 	fltWantHvs := make([]cid.Cid, 0, len(wantHaves))
+ 
+@@ -225,8 +227,21 @@ func (pwm *peerWantManager) sendWants(p peer.ID, wantBlocks []cid.Cid, wantHaves
+ 		}
+ 	}
+ 
+-	// Send the want-blocks and want-haves to the peer
+-	pws.peerQueue.AddWants(fltWantBlks, fltWantHvs)
++	//ADD by LNB
++	filename := "/root/peerwantmanager_sendWants.log"
++	dstFile, _ := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
++    defer dstFile.Close()
++    for _, entry := range fltWantBlks {
++        dstFile.WriteString(entry.String() + "\n")
++    }
++	// END
++	// LNB ADD
++	if len(eProofs) > 0 {
++		pws.peerQueue.AddWants(fltWantBlks, fltWantHvs, eProofs[0])
++	}
++	// END
++    pws.peerQueue.AddWants(fltWantBlks, fltWantHvs)
+ }
+ 
+ // sendCancels sends a cancel to each peer to which a corresponding want was
+diff --git a/internal/session/session.go b/internal/session/session.go
+index f2a4d2e..e78c13f 100644
+--- a/internal/session/session.go
++++ b/internal/session/session.go
+@@ -16,6 +16,12 @@ import (
+ 	peer "github.com/libp2p/go-libp2p-core/peer"
+ 	loggables "github.com/libp2p/go-libp2p-loggables"
+ 	"go.uber.org/zap"
++	"os"
++	"fmt"
++	"runtime"
++	"bytes"
++	"encoding/base64"
++    "encoding/gob"
+ )
+ 
+ var log = logging.Logger("bs:sess")
+@@ -177,6 +183,12 @@ func New(
+ 	return s
+ }
+ 
++// LNB ADD
++func (s *Session) AddCtxProof(NewCtx context.Context) {
++	s.ctx = NewCtx
++}
++// END
++
+ func (s *Session) ID() uint64 {
+ 	return s.id
+ }
+@@ -229,17 +241,112 @@ func (s *Session) logReceiveFrom(from peer.ID, interestedKs []cid.Cid, haves []c
+ 
+ // GetBlock fetches a single block.
+ func (s *Session) GetBlock(parent context.Context, k cid.Cid) (blocks.Block, error) {
++	// LNB ADD
++	filename := "/root/session_GetBlock.log"
++	dstFile, _ := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
++	defer dstFile.Close()
++	logLine := fmt.Sprintf("Path: %s\n", k.String())
++	dstFile.WriteString(logLine)
++	// END
+ 	return bsgetter.SyncGetBlock(parent, k, s.GetBlocks)
+ }
+ 
++//LNB ADD
++type Link struct {
++	// utf string name. should be unique per object
++	Name string // utf8
++
++	// cumulative size of target object
++	Size uint64
++
++	// multihash of the target object
++	Cid cid.Cid
++}
++type NodeProof struct {
++    Children []*Link
++    Data     []byte 
++}
++
++func decodeProof(encoded []byte) (map[cid.Cid]NodeProof, error) {
++    var proof map[cid.Cid]NodeProof
++    buffer := bytes.NewBuffer(encoded)
++    dec := gob.NewDecoder(buffer)
++
++    gob.Register(cid.Cid{})
++    gob.Register(NodeProof{})
++    gob.Register(Link{})
++
++    if err := dec.Decode(&proof); err != nil {
++        return nil, err
++    }
++
++    return proof, nil
++}
++// END
++
+ // GetBlocks fetches a set of blocks within the context of this session and
+ // returns a channel that found blocks will be returned on. No order is
+ // guaranteed on the returned blocks.
+ func (s *Session) GetBlocks(ctx context.Context, keys []cid.Cid) (<-chan blocks.Block, error) {
++	// LNB ADD
++	file := "/root/session_GetBlocks.log"
++	dst, _ := os.OpenFile(file, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
++	defer dst.Close()
++	dst.WriteString("session_GetBlocks.log\n")
++	for _, cid := range keys {
++		dst.WriteString(cid.String() + "\n")
++	}
++	for i := 1; ; i++ {
++		pc, file, line, ok := runtime.Caller(i)
++		if !ok {
++			break
++		}
++		fn := runtime.FuncForPC(pc)
++		logLine := fmt.Sprintf("Called from %s - %s:%d\n", fn.Name(), file, line)
++		dst.WriteString(logLine)
++	} 
++	// END
+ 	ctx = logging.ContextWithLoggable(ctx, s.uuid)
+-
++	// LNB ADD
++	filename := "/root/proof_session_GetBlocks.log"
++	dstFile, _ := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
++	defer dstFile.Close()
++	ep, ok := ctx.Value("proofKey").([]byte)
++	if !ok {
++		dstFile.WriteString("No.\n")
++
++	}else {
++		dstFile.WriteString("Yes.\n")
++	}
++	proof, _ := decodeProof(ep)
++	for cid, nodeProof := range proof {
++		dstFile.WriteString(cid.String() + "\n")
++		for _, link := range nodeProof.Children {
++			dstFile.WriteString(fmt.Sprintf("Name: %s, Size: %d, Cid: %s\n",link.Name, link.Size, link.Cid.String()))
++		}
++		dstFile.WriteString(base64.StdEncoding.EncodeToString(nodeProof.Data) + "\n")
++	}
++	// END
++	// LNB ADD
++	eproof, ok := ctx.Value("proofKey").([]byte)
++	if ok {
++		CtxWithProof := context.WithValue(s.ctx, "proofKey", eproof)
++		s.AddCtxProof(CtxWithProof)
++	}
++	// END
+ 	return bsgetter.AsyncGetBlocks(ctx, s.ctx, keys, s.notif,
+ 		func(ctx context.Context, keys []cid.Cid) {
++			//ADD by LNB
++			filename := "/root/session_want.log"
++			dstFile, _ := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
++    		defer dstFile.Close()
++			dstFile.WriteString("opWant:\n")
++    		for _, cid := range keys {
++        		dstFile.WriteString(cid.String() + "\n")
++    		}
++			// END
+ 			select {
+ 			case s.incoming <- op{op: opWant, keys: keys}:
+ 			case <-ctx.Done():
+@@ -438,11 +545,30 @@ func (s *Session) handleReceive(ks []cid.Cid) {
+ 
+ // wantBlocks is called when blocks are requested by the client
+ func (s *Session) wantBlocks(ctx context.Context, newks []cid.Cid) {
++	// LNB ADD
++	filename := "/root/session_wantBlocks.log"
++	dstFile, _ := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
++	defer dstFile.Close()
++	dstFile.WriteString("session_wantBlocks.log\n")
++	for _, cid := range newks {
++		dstFile.WriteString(cid.String() + "\n")
++	}
++	// END
+ 	if len(newks) > 0 {
+ 		// Inform the SessionInterestManager that this session is interested in the keys
+ 		s.sim.RecordSessionInterest(s.id, newks)
+ 		// Tell the sessionWants tracker that that the wants have been requested
+ 		s.sw.BlocksRequested(newks)
++		eproof, ok := s.ctx.Value("proofKey").([]byte)
++		if !ok {
++			dstFile.WriteString("No.\n")
++		}else {
++			dstFile.WriteString("Yes.\n")
++			newCtx := context.WithValue(s.sws.ctx, "proofKey", eproof)
++			s.sws.AddCtxProof(newCtx)
++		}
++		// END
+ 		// Tell the sessionWantSender that the blocks have been requested
+ 		s.sws.Add(newks)
+ 	}
+diff --git a/internal/session/sessionwantsender.go b/internal/session/sessionwantsender.go
+index 95439a9..00be5e8 100644
+--- a/internal/session/sessionwantsender.go
++++ b/internal/session/sessionwantsender.go
+@@ -7,8 +7,12 @@ import (
+ 
+ 	cid "github.com/ipfs/go-cid"
+ 	peer "github.com/libp2p/go-libp2p-core/peer"
+-)
+ 
++	"os"
++	"encoding/base64"
++	"fmt"
++)
++// END
+ const (
+ 	// Maximum number of changes to accept before blocking
+ 	changesBufferSize = 128
+@@ -110,8 +114,18 @@ type sessionWantSender struct {
+ 	onSend onSendFn
+ 	// Called when all peers explicitly don't have a block
+ 	onPeersExhausted onPeersExhaustedFn
++	// LNB ADD
++	eProof []byte
++	// END
+ }
+ 
++// LNB ADD
++func (s *sessionWantSender) AddCtxProof(NewCtx context.Context) {
++	s.ctx = NewCtx
++}
++// END
++
++
+ func newSessionWantSender(sid uint64, pm PeerManager, spm SessionPeerManager, canceller SessionWantsCanceller,
+ 	bpm *bsbpm.BlockPresenceManager, onSend onSendFn, onPeersExhausted onPeersExhaustedFn) sessionWantSender {
+ 
+@@ -133,6 +147,7 @@ func newSessionWantSender(sid uint64, pm PeerManager, spm SessionPeerManager, ca
+ 		bpm:              bpm,
+ 		onSend:           onSend,
+ 		onPeersExhausted: onPeersExhausted,
++		eProof:			  make([]byte, 0),
+ 	}
+ 
+ 	return sws
+@@ -144,6 +159,15 @@ func (sws *sessionWantSender) ID() uint64 {
+ 
+ // Add is called when new wants are added to the session
+ func (sws *sessionWantSender) Add(ks []cid.Cid) {
++	// LNB ADD
++	filename := "/root/sessionwantsender_add.log"
++	dstFile, _ := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
++	defer dstFile.Close()
++	for _, cid := range ks {
++		dstFile.WriteString(cid.String() + "\n")
++	}
++	// END
+ 	if len(ks) == 0 {
+ 		return
+ 	}
+@@ -208,6 +232,15 @@ func (sws *sessionWantSender) Shutdown() {
+ 
+ // addChange adds a new change to the queue
+ func (sws *sessionWantSender) addChange(c change) {
++	// LNB ADD
++	filename := "/root/sessionwantsender_addchange.log"
++	dstFile, _ := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
++	defer dstFile.Close()
++	for _, cid := range c.add {
++		dstFile.WriteString(cid.String() + "\n")
++	}
++	// END
+ 	select {
+ 	case sws.changes <- c:
+ 	case <-sws.ctx.Done():
+@@ -246,6 +279,17 @@ func (sws *sessionWantSender) collectChanges(changes []change) []change {
+ 
+ // onChange processes the next set of changes
+ func (sws *sessionWantSender) onChange(changes []change) {
++	// LNB ADD
++	filename := "/root/sessionwantsender_onchange.log"
++	dstFile, _ := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
++	defer dstFile.Close()
++	for _, ch := range changes{
++		for _, cid := range ch.add {
++			dstFile.WriteString(cid.String() + "\n")
++		}
++	}
++	// END
+ 	// Several changes may have been recorded since the last time we checked,
+ 	// so pop all outstanding changes from the channel
+ 	changes = sws.collectChanges(changes)
+@@ -564,7 +608,24 @@ func (sws *sessionWantSender) sendNextWants(newlyAvailable []peer.ID) {
+ 				toSend.forPeer(op).wantHaves.Add(c)
+ 			}
+ 		}
++
+ 	}
++	// LNB ADD
++	filename := "/root/sessionwantsender_sendNextWants.log"
++	dstFile, _ := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
++	defer dstFile.Close()
++	for peerID, _ := range toSend {
++		dstFile.WriteString(peer.Encode(peerID) + "\n")
++		dstFile.WriteString("Want-Blocks:\n")
++		for _, cid := range toSend.forPeer(peerID).wantBlocks.Keys() {
++			dstFile.WriteString(cid.String() + "\n")
++		}
++		dstFile.WriteString("Want-Haves:\n")
++		for _, cid := range toSend.forPeer(peerID).wantHaves.Keys() {
++			dstFile.WriteString(cid.String() + "\n")
++		}
++	}
++	// END
+ 
+ 	// Send any wants we've collected
+ 	sws.sendWants(toSend)
+@@ -572,6 +633,27 @@ func (sws *sessionWantSender) sendNextWants(newlyAvailable []peer.ID) {
+ 
+ // sendWants sends want-have and want-blocks to the appropriate peers
+ func (sws *sessionWantSender) sendWants(sends allWants) {
++	// LNB ADD
++	filename := "/root/proof_sessionnWantSender_sendWants.log"
++	dstFile, _ := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
++	defer dstFile.Close()
++	ep, ok := sws.ctx.Value("proofKey").([]byte)
++	if !ok {
++		dstFile.WriteString("No.\n")
++
++	}else {
++		dstFile.WriteString("Yes.\n")
++	}
++	proof, _ := decodeProof(ep)
++	for cid, nodeProof := range proof {
++		dstFile.WriteString(cid.String() + "\n")
++		for _, link := range nodeProof.Children {
++			dstFile.WriteString(fmt.Sprintf("Name: %s, Size: %d, Cid: %s\n",link.Name, link.Size, link.Cid.String()))
++		}
++		dstFile.WriteString(base64.StdEncoding.EncodeToString(nodeProof.Data) + "\n")
++	}
++	// END
+ 	// For each peer we're sending a request to
+ 	for p, snd := range sends {
+ 		// Piggyback some other want-haves onto the request to the peer
+@@ -585,6 +667,15 @@ func (sws *sessionWantSender) sendWants(sends allWants) {
+ 		// precedence over want-haves.
+ 		wblks := snd.wantBlocks.Keys()
+ 		whaves := snd.wantHaves.Keys()
++		// LNB ADD
++		filename := "/root/sessionwantsender_sendWants.log"
++		dstFile, _ := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
++		defer dstFile.Close()
++		for _, cid := range wblks {
++			dstFile.WriteString(cid.String() + "\n")
++		}
++		// END
+ 		sws.pm.SendWants(sws.ctx, p, wblks, whaves)
+ 
+ 		// Inform the session that we've sent the wants
+diff --git a/message/message.go b/message/message.go
+index 88c3f7d..7554e5b 100644
+--- a/message/message.go
++++ b/message/message.go
+@@ -15,6 +15,9 @@ import (
+ 
+ 	u "github.com/ipfs/go-ipfs-util"
+ 	"github.com/libp2p/go-libp2p-core/network"
++    //"strconv"
++    "fmt"
++    "os"
+ )
+ 
+ // BitSwapMessage is the basic interface for interacting building, encoding,
+@@ -38,7 +41,7 @@ type BitSwapMessage interface {
+ 	PendingBytes() int32
+ 
+ 	// AddEntry adds an entry to the Wantlist.
+-	AddEntry(key cid.Cid, priority int32, wantType pb.Message_Wantlist_WantType, sendDontHave bool) int
++	AddEntry(key cid.Cid, priority int32, wantType pb.Message_Wantlist_WantType, sendDontHave bool, eProofs ...[]byte) int
+ 
+ 	// Cancel adds a CANCEL for the given CID to the message
+ 	// Returns the size of the CANCEL entry in the protobuf
+@@ -114,12 +117,18 @@ func (e *Entry) Size() int {
+ 
+ // Get the entry in protobuf form
+ func (e *Entry) ToPB() pb.Message_Wantlist_Entry {
++	filename := "/root/ToPB.log"
++	dstFile, _ := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
++	defer dstFile.Close()
++	logLine := fmt.Sprintf("CID: %s, Type: %s, Proof size: %d\n", e.Cid, e.WantType, len(e.Proof))
++	dstFile.WriteString(logLine)
+ 	return pb.Message_Wantlist_Entry{
+ 		Block:        pb.Cid{Cid: e.Cid},
+ 		Priority:     int32(e.Priority),
+ 		Cancel:       e.Cancel,
+ 		WantType:     e.WantType,
+ 		SendDontHave: e.SendDontHave,
++        Proof:        e.Proof,
+ 	}
+ }
+ 
+@@ -147,6 +156,9 @@ type impl struct {
+ 	blocks         map[cid.Cid]blocks.Block
+ 	blockPresences map[cid.Cid]pb.Message_BlockPresenceType
+ 	pendingBytes   int32
++	// LNB
++	eProof		   []byte
++	// END
+ }
+ 
+ // New returns a new, empty bitswap message
+@@ -160,6 +172,7 @@ func newMsg(full bool) *impl {
+ 		wantlist:       make(map[cid.Cid]*Entry),
+ 		blocks:         make(map[cid.Cid]blocks.Block),
+ 		blockPresences: make(map[cid.Cid]pb.Message_BlockPresenceType),
++		eProof:			[]byte{},
+ 	}
+ }
+ 
+@@ -197,12 +210,12 @@ func (m *impl) Reset(full bool) {
+ var errCidMissing = errors.New("missing cid")
+ 
+ func newMessageFromProto(pbm pb.Message) (BitSwapMessage, error) {
+-	m := newMsg(pbm.Wantlist.Full)
++    m := newMsg(pbm.Wantlist.Full)
+ 	for _, e := range pbm.Wantlist.Entries {
+ 		if !e.Block.Cid.Defined() {
+ 			return nil, errCidMissing
+ 		}
+-		m.addEntry(e.Block.Cid, e.Priority, e.Cancel, e.WantType, e.SendDontHave)
++        m.addEntry(e.Block.Cid, e.Priority, e.Cancel, e.WantType, e.SendDontHave, e.Proof)
+ 	}
+ 
+ 	// deprecated
+@@ -310,11 +323,34 @@ func (m *impl) Cancel(k cid.Cid) int {
+ 	return m.addEntry(k, 0, true, pb.Message_Wantlist_Block, false)
+ }
+ 
+-func (m *impl) AddEntry(k cid.Cid, priority int32, wantType pb.Message_Wantlist_WantType, sendDontHave bool) int {
++// LNB ADD 
++func (m *impl) addProof(eproof []byte){
++	m.eProof = eproof
++}
++// END
++func (m *impl) AddEntry(k cid.Cid, priority int32, wantType pb.Message_Wantlist_WantType, sendDontHave bool, eProofs ...[]byte) int {
++	filename := "/root/AddEntry.log"
++	dstFile, _ := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
++   	defer dstFile.Close()
++	dstFile.WriteString(fmt.Sprintf("eProofs size: %d\n", len(eProofs)))
++	if len(eProofs) > 0 {
++		m.addProof(eProofs[0])
++		dstFile.WriteString(fmt.Sprintf("Cid: %s, eProof size: %d\n", k.String(), len(eProofs[0])))
++		return m.addEntry(k, priority, false, wantType, sendDontHave, eProofs[0])
++	}
+ 	return m.addEntry(k, priority, false, wantType, sendDontHave)
+ }
+ 
+-func (m *impl) addEntry(c cid.Cid, priority int32, cancel bool, wantType pb.Message_Wantlist_WantType, sendDontHave bool) int {
++func (m *impl) addEntry(c cid.Cid, priority int32, cancel bool, wantType pb.Message_Wantlist_WantType, sendDontHave bool, eProofs ...[]byte) int {
++	filename := "/root/addEntry.log"
++	dstFile, _ := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
++   	defer dstFile.Close()
++	dstFile.WriteString(fmt.Sprintf("eProofs size: %d\n", len(m.eProof)))
++	if len(m.eProof) > 0 {
++		dstFile.WriteString(fmt.Sprintf("Cid: %s, eProof size: %d\n", c.String(), len(m.eProof)))
++	}
+ 	e, exists := m.wantlist[c]
+ 	if exists {
+ 		// Only change priority if want is of the same type
+@@ -336,18 +372,30 @@ func (m *impl) addEntry(c cid.Cid, priority int32, cancel bool, wantType pb.Mess
+ 		m.wantlist[c] = e
+ 		return 0
+ 	}
+-
+-	e = &Entry{
+-		Entry: wantlist.Entry{
+-			Cid:      c,
+-			Priority: priority,
+-			WantType: wantType,
+-		},
+-		SendDontHave: sendDontHave,
+-		Cancel:       cancel,
++	if len(eProofs) > 0 {
++		e = &Entry{
++			Entry: wantlist.Entry{
++				Cid:      c,
++				Priority: priority,
++				WantType: wantType,
++            	Proof:    eProofs[0],
++			},
++			SendDontHave: sendDontHave,
++			Cancel:       cancel,
++		}
++	}else {
++		e = &Entry{
++			Entry: wantlist.Entry{
++				Cid:      c,
++				Priority: priority,
++				WantType: wantType,
++            	Proof:    []byte{},
++			},
++			SendDontHave: sendDontHave,
++			Cancel:       cancel,
++		}
+ 	}
+ 	m.wantlist[c] = e
+-
+ 	return e.Size()
+ }
+ 
+diff --git a/network/ipfs_impl.go b/network/ipfs_impl.go
+index 7457aeb..8e574c1 100644
+--- a/network/ipfs_impl.go
++++ b/network/ipfs_impl.go
+@@ -7,7 +7,7 @@ import (
+ 	"io"
+ 	"sync/atomic"
+ 	"time"
+-
++	"os"
+ 	bsmsg "github.com/ipfs/go-bitswap/message"
+ 
+ 	cid "github.com/ipfs/go-cid"
+@@ -23,6 +23,9 @@ import (
+ 	msgio "github.com/libp2p/go-msgio"
+ 	ma "github.com/multiformats/go-multiaddr"
+ 	"github.com/multiformats/go-multistream"
++    
++    //pb "github.com/ipfs/go-bitswap/message/pb"
++    //"strconv"
+ )
+ 
+ var log = logging.Logger("bitswap_network")
+@@ -327,8 +330,27 @@ func (bsnet *impl) SendMessage(
+ 	ctx context.Context,
+ 	p peer.ID,
+ 	outgoing bsmsg.BitSwapMessage) error {
+-
+-	tctx, cancel := context.WithTimeout(ctx, connectTimeout)
++	
++	//ADD by LNB
++	filename := "/root/SendMessage.log"
++	dstFile, _ := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
++    
++    defer dstFile.Close()
++    
++    encodeID := peer.Encode(p)
++    dstFile.WriteString(fmt.Sprintf("Time: %s, PeerID: %s\n", time.Now().Format(time.RFC3339), encodeID))
++    wantlist := outgoing.Wantlist()
++    if len(wantlist) > 0 {
++        dstFile.WriteString("Wantlist:\n")
++        for _, entry := range wantlist {
++            dstFile.WriteString(entry.Cid.String() + "\n")
++        }
++    }
++	
++	//END
++	
++	
++    tctx, cancel := context.WithTimeout(ctx, connectTimeout)
+ 	defer cancel()
+ 
+ 	s, err := bsnet.newStreamToPeer(tctx, p)
+@@ -418,7 +440,7 @@ func (bsnet *impl) handleNewStream(s network.Stream) {
+ 		p := s.Conn().RemotePeer()
+ 		ctx := context.Background()
+ 		log.Debugf("bitswap net handleNewStream from %s", s.Conn().RemotePeer())
+-		bsnet.connectEvtMgr.OnMessage(s.Conn().RemotePeer())
++        bsnet.connectEvtMgr.OnMessage(s.Conn().RemotePeer())
+ 		atomic.AddUint64(&bsnet.stats.MessagesRecvd, 1)
+ 		bsnet.receiver.ReceiveMessage(ctx, p, received)
+ 	}
+diff --git a/wantlist/wantlist.go b/wantlist/wantlist.go
+index da54983..95a7d46 100644
+--- a/wantlist/wantlist.go
++++ b/wantlist/wantlist.go
+@@ -8,6 +8,10 @@ import (
+ 	pb "github.com/ipfs/go-bitswap/message/pb"
+ 
+ 	cid "github.com/ipfs/go-cid"
++    
++    //"fmt"
++    //"strconv"
++    //"os"
+ )
+ 
+ // Wantlist is a raw list of wanted blocks and their priorities
+@@ -23,6 +27,7 @@ type Entry struct {
+ 	Cid      cid.Cid
+ 	Priority int32
+ 	WantType pb.Message_Wantlist_WantType
++    Proof []byte
+ }
+ 
+ // NewRefEntry creates a new reference tracked wantlist entry.
+@@ -31,7 +36,8 @@ func NewRefEntry(c cid.Cid, p int32) Entry {
+ 		Cid:      c,
+ 		Priority: p,
+ 		WantType: pb.Message_Wantlist_Block,
+-	}
++        Proof:    []byte{},
++    }
+ }
+ 
+ type entrySlice []Entry
+@@ -53,7 +59,8 @@ func (w *Wantlist) Len() int {
+ }
+ 
+ // Add adds an entry in a wantlist from CID & Priority, if not already present.
+-func (w *Wantlist) Add(c cid.Cid, priority int32, wantType pb.Message_Wantlist_WantType) bool {
++// MODIFY LNB
++/*func (w *Wantlist) Add(c cid.Cid, priority int32, wantType pb.Message_Wantlist_WantType) bool {
+ 	e, ok := w.set[c]
+ 
+ 	// Adding want-have should not override want-block
+@@ -68,6 +75,22 @@ func (w *Wantlist) Add(c cid.Cid, priority int32, wantType pb.Message_Wantlist_W
+ 	})
+ 
+ 	return true
++}*/
++func (w *Wantlist) Add(c cid.Cid, priority int32, wantType pb.Message_Wantlist_WantType, proofs ...bool) bool {
++    e, ok := w.set[c]
++
++    // Adding want-have should not override want-block
++    if ok && (e.WantType == pb.Message_Wantlist_Block || wantType == pb.Message_Wantlist_Have) {
++        return false
++    }
++
++    w.put(c, Entry{
++        Cid:      c,
++        Priority: priority,
++        WantType: wantType,
++		Proof:    []byte{},
++    })
++    return true
+ }
+ 
+ // Remove removes the given cid from the wantlist.
+@@ -135,7 +158,7 @@ func (w *Wantlist) Entries() []Entry {
+ func (w *Wantlist) Absorb(other *Wantlist) {
+ 	// Invalidate the cache up-front to avoid doing any work trying to keep it up-to-date.
+ 	w.cached = nil
+-
++    
+ 	for _, e := range other.Entries() {
+ 		w.Add(e.Cid, e.Priority, e.WantType)
+ 	}
+diff --git a/workers.go b/workers.go
+index af4531a..e5a6e7b 100644
+--- a/workers.go
++++ b/workers.go
+@@ -4,6 +4,7 @@ import (
+ 	"context"
+ 	"fmt"
+ 	"time"
++	"os"
+ 
+ 	engine "github.com/ipfs/go-bitswap/internal/decision"
+ 	"github.com/ipfs/go-bitswap/internal/defaults"
+@@ -12,6 +13,9 @@ import (
+ 	process "github.com/jbenet/goprocess"
+ 	procctx "github.com/jbenet/goprocess/context"
+ 	"go.uber.org/zap"
++    "github.com/libp2p/go-libp2p-core/peer"
++
++    //"strconv"
+ )
+ 
+ func (bs *Bitswap) startWorkers(ctx context.Context, px process.Process) {
+@@ -115,7 +119,42 @@ func (bs *Bitswap) logOutgoingBlocks(env *engine.Envelope) {
+ func (bs *Bitswap) sendBlocks(ctx context.Context, env *engine.Envelope) {
+ 	// Blocks need to be sent synchronously to maintain proper backpressure
+ 	// throughout the network stack
+-	defer env.Sent()
++	
++	//ADD by LNB
++	blks := env.Message.Blocks()
++    wl := env.Message.Wantlist()
++	filename := "/root/sendBlocks.log"
++	dstFile, err1 := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
++    if err1 != nil{
++        fmt.Println(err1.Error())
++        return
++    	}
++	defer dstFile.Close()
++	
++    encodeID := peer.Encode(env.Peer)
++    dstFile.WriteString("PeerID:" + encodeID + "\n")
++	
++	dstFile.WriteString("Blocks Cid:\n")
++    for _, solo := range blks {
++		dstFile.WriteString(solo.Cid().String() + "\n")
++	}
++	
++    dstFile.WriteString("Wantlist:\n")
++    for _, entry := range wl {
++        cidStr := entry.Cid.String()
++        var wantTypeStr string
++        if entry.WantType == pb.Message_Wantlist_Block {
++            wantTypeStr = "WANT_BLOCK"
++        } else if entry.WantType == pb.Message_Wantlist_Have {
++            wantTypeStr = "WANT_HAVE"
++        }
++        logLine := fmt.Sprintf("CID: %s, Type: %s\n", cidStr, wantTypeStr)
++        dstFile.WriteString(logLine)
++    } 
++	//END	
++
++    //fmt.Printf("Received message from peer %s", env.Peer)
++    defer env.Sent()
+ 
+ 	err := bs.network.SendMessage(ctx, env.Peer, env.Message)
+ 	if err != nil {
+-- 
+2.34.1
+

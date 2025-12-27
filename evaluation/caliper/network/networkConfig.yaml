@@ -1,0 +1,143 @@
+name: Caliper Benchmarks
+version: "2.0.0"
+
+caliper:
+  blockchain: fabric
+
+channels:
+  # channelName of mychannel matches the name of the channel created by test network
+  - channelName: mychannel
+    # the chaincodeIDs of all the fabric chaincodes in caliper-benchmarks
+    contracts:
+    - id: acmc
+
+organizations:
+  - mspid: Org1MSP
+    # Identities come from cryptogen created material for test-network
+    identities:
+      certificates:
+      - name: 'User1'
+        clientPrivateKey:
+          path: '../fabric-samples/test-network/organizations/peerOrganizations/org1.example.com/users/User1@org1.example.com/msp/keystore/priv_sk'
+        clientSignedCert:
+          path: '../fabric-samples/test-network/organizations/peerOrganizations/org1.example.com/users/User1@org1.example.com/msp/signcerts/User1@org1.example.com-cert.pem'
+    connectionProfile:
+      path: '../fabric-samples/test-network/organizations/peerOrganizations/org1.example.com/connection-org1.yaml'
+      discover: true
+
+  - mspid: Org2MSP
+    # Identities come from cryptogen created material for test-network
+    identities:
+      certificates:
+      - name: 'User2'
+        clientPrivateKey:
+          path: '../fabric-samples/test-network/organizations/peerOrganizations/org2.example.com/users/User1@org2.example.com/msp/keystore/priv_sk'
+        clientSignedCert:
+          path: '../fabric-samples/test-network/organizations/peerOrganizations/org2.example.com/users/User1@org2.example.com/msp/signcerts/User1@org2.example.com-cert.pem'
+    connectionProfile:
+      path: '../fabric-samples/test-network/organizations/peerOrganizations/org2.example.com/connection-org2.yaml'
+      discover: true
+
+  - mspid: Org4MSP
+    # Identities come from cryptogen created material for test-network
+    identities:
+      certificates:
+      - name: 'User4'
+        clientPrivateKey:
+          path: '../fabric-samples/test-network/organizations/peerOrganizations/org4.example.com/users/User1@org4.example.com/msp/keystore/priv_sk'
+        clientSignedCert:
+          path: '../fabric-samples/test-network/organizations/peerOrganizations/org4.example.com/users/User1@org4.example.com/msp/signcerts/User1@org4.example.com-cert.pem'
+    connectionProfile:
+      path: '../fabric-samples/test-network/organizations/peerOrganizations/org4.example.com/connection-org4.yaml'
+      discover: true
+
+  - mspid: Org5MSP
+    # Identities come from cryptogen created material for test-network
+    identities:
+      certificates:
+      - name: 'User5'
+        clientPrivateKey:
+          path: '../fabric-samples/test-network/organizations/peerOrganizations/org5.example.com/users/User1@org5.example.com/msp/keystore/priv_sk'
+        clientSignedCert:
+          path: '../fabric-samples/test-network/organizations/peerOrganizations/org5.example.com/users/User1@org5.example.com/msp/signcerts/User1@org5.example.com-cert.pem'
+    connectionProfile:
+      path: '../fabric-samples/test-network/organizations/peerOrganizations/org5.example.com/connection-org5.yaml'
+      discover: true
+
+  - mspid: Org6MSP
+    # Identities come from cryptogen created material for test-network
+    identities:
+      certificates:
+      - name: 'User6'
+        clientPrivateKey:
+          path: '../fabric-samples/test-network/organizations/peerOrganizations/org6.example.com/users/User1@org6.example.com/msp/keystore/priv_sk'
+        clientSignedCert:
+          path: '../fabric-samples/test-network/organizations/peerOrganizations/org6.example.com/users/User1@org6.example.com/msp/signcerts/User1@org6.example.com-cert.pem'
+    connectionProfile:
+      path: '../fabric-samples/test-network/organizations/peerOrganizations/org6.example.com/connection-org6.yaml'
+      discover: true
+
+  - mspid: Org7MSP
+    # Identities come from cryptogen created material for test-network
+    identities:
+      certificates:
+      - name: 'User7'
+        clientPrivateKey:
+          path: '../fabric-samples/test-network/organizations/peerOrganizations/org7.example.com/users/User1@org7.example.com/msp/keystore/priv_sk'
+        clientSignedCert:
+          path: '../fabric-samples/test-network/organizations/peerOrganizations/org7.example.com/users/User1@org7.example.com/msp/signcerts/User1@org7.example.com-cert.pem'
+    connectionProfile:
+      path: '../fabric-samples/test-network/organizations/peerOrganizations/org7.example.com/connection-org7.yaml'
+      discover: true
+
+  - mspid: Org8MSP
+    # Identities come from cryptogen created material for test-network
+    identities:
+      certificates:
+      - name: 'User8'
+        clientPrivateKey:
+          path: '../fabric-samples/test-network/organizations/peerOrganizations/org8.example.com/users/User1@org8.example.com/msp/keystore/priv_sk'
+        clientSignedCert:
+          path: '../fabric-samples/test-network/organizations/peerOrganizations/org8.example.com/users/User1@org8.example.com/msp/signcerts/User1@org8.example.com-cert.pem'
+    connectionProfile:
+      path: '../fabric-samples/test-network/organizations/peerOrganizations/org8.example.com/connection-org8.yaml'
+      discover: true
+  - mspid: Org9MSP
+    # Identities come from cryptogen created material for test-network
+    identities:
+      certificates:
+      - name: 'User9'
+        clientPrivateKey:
+          path: '../fabric-samples/test-network/organizations/peerOrganizations/org9.example.com/users/User1@org9.example.com/msp/keystore/priv_sk'
+        clientSignedCert:
+          path: '../fabric-samples/test-network/organizations/peerOrganizations/org9.example.com/users/User1@org9.example.com/msp/signcerts/User1@org9.example.com-cert.pem'
+    connectionProfile:
+      path: '../fabric-samples/test-network/organizations/peerOrganizations/org9.example.com/connection-org9.yaml'
+      discover: true
+
+  - mspid: Org10MSP
+    # Identities come from cryptogen created material for test-network
+    identities:
+      certificates:
+      - name: 'User10'
+        clientPrivateKey:
+          path: '../fabric-samples/test-network/organizations/peerOrganizations/org10.example.com/users/User1@org10.example.com/msp/keystore/priv_sk'
+        clientSignedCert:
+          path: '../fabric-samples/test-network/organizations/peerOrganizations/org10.example.com/users/User1@org10.example.com/msp/signcerts/User1@org10.example.com-cert.pem'
+    connectionProfile:
+      path: '../fabric-samples/test-network/organizations/peerOrganizations/org10.example.com/connection-org10.yaml'
+      discover: true
+
+
+  - mspid: Org11MSP
+    # Identities come from cryptogen created material for test-network
+    identities:
+      certificates:
+      - name: 'User11'
+        clientPrivateKey:
+          path: '../fabric-samples/test-network/organizations/peerOrganizations/org11.example.com/users/User1@org11.example.com/msp/keystore/priv_sk'
+        clientSignedCert:
+          path: '../fabric-samples/test-network/organizations/peerOrganizations/org11.example.com/users/User1@org11.example.com/msp/signcerts/User1@org11.example.com-cert.pem'
+    connectionProfile:
+      path: '../fabric-samples/test-network/organizations/peerOrganizations/org11.example.com/connection-org11.yaml'
+      discover: true

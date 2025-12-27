@@ -1,0 +1,137 @@
+test:
+  name: zkGuard CheckPerm Benchmark
+  description: High concurrency CheckPerm (User2 downloading) using pre-signed parameters
+  workers:
+    number: 100
+
+  common:
+    checkPermArgs: &checkPermArgs
+      contractId: acmc
+      channel: mychannel
+      function: CheckPerm
+
+      # 负载均衡配置 (模拟不同节点的请求)
+      invokerOrgCount: 10
+      invokerOrg1:  User1
+      invokerOrg2:  _Org2MSP_User2
+      invokerOrg3:  _Org4MSP_User4
+      invokerOrg4:  _Org5MSP_User5
+      invokerOrg5:  _Org6MSP_User6
+      invokerOrg6:  _Org7MSP_User7
+      invokerOrg7:  _Org8MSP_User8
+      invokerOrg8:  _Org9MSP_User9
+      invokerOrg9:  _Org10MSP_User10
+      invokerOrg10: _Org11MSP_User11
+      
+      invoker: User1
+
+  rounds:
+    # ==== warmup ====
+    - label: warmup
+      txDuration: 30
+      rateControl: { type: fixed-rate, opts: { tps: 200 } }
+      workload:
+        module: ./workload/checkPerm.js
+        arguments:
+          <<: *checkPermArgs
+          label: warmup
+
+    # ==== 实验轮 ====
+    - label: check_200
+      txDuration: 120
+      rateControl: { type: fixed-rate, opts: { tps: 200 } }
+      workload:
+        module: ./workload/checkPerm.js
+        arguments:
+          <<: *checkPermArgs
+          label: check_200
+
+    - label: check_300
+      txDuration: 120
+      rateControl: { type: fixed-rate, opts: { tps: 300 } }
+      workload:
+        module: ./workload/checkPerm.js
+        arguments:
+          <<: *checkPermArgs
+          label: check_300
+
+    - label: check_400
+      txDuration: 120
+      rateControl: { type: fixed-rate, opts: { tps: 400 } }
+      workload:
+        module: ./workload/checkPerm.js
+        arguments:
+          <<: *checkPermArgs
+          label: check_400
+
+    - label: check_500
+      txDuration: 120
+      rateControl: { type: fixed-rate, opts: { tps: 500 } }
+      workload:
+        module: ./workload/checkPerm.js
+        arguments:
+          <<: *checkPermArgs
+          label: check_500
+
+    - label: check_600
+      txDuration: 120
+      rateControl: { type: fixed-rate, opts: { tps: 600 } }
+      workload:
+        module: ./workload/checkPerm.js
+        arguments:
+          <<: *checkPermArgs
+          label: check_600
+
+    - label: check_650
+      txDuration: 120
+      rateControl: { type: fixed-rate, opts: { tps: 650 } }
+      workload:
+        module: ./workload/checkPerm.js
+        arguments:
+          <<: *checkPermArgs
+          label: check_650
+
+    - label: check_700
+      txDuration: 120
+      rateControl: { type: fixed-rate, opts: { tps: 700 } }
+      workload:
+        module: ./workload/checkPerm.js
+        arguments:
+          <<: *checkPermArgs
+          label: check_700
+
+    - label: check_750
+      txDuration: 120
+      rateControl: { type: fixed-rate, opts: { tps: 750 } }
+      workload:
+        module: ./workload/checkPerm.js
+        arguments:
+          <<: *checkPermArgs
+          label: check_750
+
+    - label: check_800
+      txDuration: 120
+      rateControl: { type: fixed-rate, opts: { tps: 800 } }
+      workload:
+        module: ./workload/checkPerm.js
+        arguments:
+          <<: *checkPermArgs
+          label: check_800
+
+    - label: check_900
+      txDuration: 120
+      rateControl: { type: fixed-rate, opts: { tps: 900 } }
+      workload:
+        module: ./workload/checkPerm.js
+        arguments:
+          <<: *checkPermArgs
+          label: check_900
+
+    - label: check_1000
+      txDuration: 120
+      rateControl: { type: fixed-rate, opts: { tps: 1000 } }
+      workload:
+        module: ./workload/checkPerm.js
+        arguments:
+          <<: *checkPermArgs
+          label: check_1000
