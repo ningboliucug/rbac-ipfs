@@ -1,4 +1,4 @@
-# RBAC-IPFS: A Blockchain-Based Traceable Access Control Scheme for IPFS
+# A Blockchain-Based Traceable Access Control Scheme for IPFS
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Hyperledger Fabric](https://img.shields.io/badge/Hyperledger%20Fabric-v2.x-green)](https://www.hyperledger.org/use/fabric)
