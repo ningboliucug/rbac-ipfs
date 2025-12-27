@@ -45,6 +45,8 @@ rbac-ipfs-implementation/
         ├── go-bitswap-v0.6.0/  # Patch for data exchange protocol
         └── go-ipfs-v0.14.0-dev/# Patch for IPFS daemon
 
+```
+
 ## 🛠️ Prerequisites
 
 * **Operating System**: Linux (Ubuntu 20.04 LTS recommended) or macOS
@@ -56,35 +58,41 @@ rbac-ipfs-implementation/
 
 ### 1. Deploy Smart Contracts
 
-```
+```bash
 ./network.sh up createChannel -c mychannel
-./network.sh deployCC -ccn rbac-ipfs -ccp ./path/to/chaincode -ccl go
+./network.sh deployCC -ccn rbac-ipfs -ccp ./chaincode -ccl go
+
 ```
 
 ### 2. Client Operations
 
-```
+```bash
 cd client-sdk/scripts
 chmod +x functional_test.sh
 ./functional_test.sh
+
 ```
 
 ### 3. Apply IPFS Protocol Patches
 
-```
+```bash
 git clone https://github.com/ipfs/go-ipfs.git
 cd go-ipfs
 git checkout v0.14.0
-git apply ../ipfs-mod/go-ipfs/0001-feat-For-zk-Guard.patch
+git apply ../ipfs-mod/patches/go-ipfs-v0.14.0-dev/0001-feat-For-rbac-ipfs.patch
 make install
+
 ```
+
+*(Note: Apply the bitswap patch similarly if needed, located in `ipfs-mod/patches/go-bitswap-v0.6.0/`)*
 
 ## 📊 Performance Evaluation
 
-```
+```bash
 cd evaluation
 npm install
 ./run_benchmark.sh systemMix
+
 ```
 
 ## 🔗 Citation
@@ -97,8 +105,18 @@ npm install
   year={2024},
   publisher={Elsevier}
 }
+
 ```
 
 ## 📝 License
 
 Apache 2.0 License.
+
+```
+
+### 主要修复点：
+1.  **Project Structure 闭合**：在 `go-ipfs-v0.14.0-dev/# Patch for IPFS daemon` 这一行下面，补上了 ` ``` `，这样后面的内容就会恢复正常显示。
+2.  **Patch 路径修正**：在 Installation 部分，我注意到您之前的命令是 `git apply ../ipfs-mod/go-ipfs/...`，但我根据您的目录结构更新为了 `git apply ../ipfs-mod/patches/go-ipfs-v0.14.0-dev/0001-feat-For-rbac-ipfs.patch`（这与您 Git 提交记录中的重命名操作一致）。
+3.  **语言标记**：给命令块添加了 `bash` 标记，这样在 GitHub 上会有语法高亮，看起来更专业。
+
+```
