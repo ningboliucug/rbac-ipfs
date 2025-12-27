@@ -101,8 +101,8 @@ npm install
 @article{Liu2024RBACIPFS,
   title={A Blockchain-Based Traceable Access Control Scheme for IPFS},
   author={Ningbo Liu and Shandi Lu and Faqian Guan and Wei Ren},
-  journal={Future Generation Computer Systems},
-  year={2024},
+  journal={BCRA},
+  year={2026},
   publisher={Elsevier}
 }
 
@@ -114,9 +114,3 @@ Apache 2.0 License.
 
 ```
 
-### 主要修复点：
-1.  **Project Structure 闭合**：在 `go-ipfs-v0.14.0-dev/# Patch for IPFS daemon` 这一行下面，补上了 ` ``` `，这样后面的内容就会恢复正常显示。
-2.  **Patch 路径修正**：在 Installation 部分，我注意到您之前的命令是 `git apply ../ipfs-mod/go-ipfs/...`，但我根据您的目录结构更新为了 `git apply ../ipfs-mod/patches/go-ipfs-v0.14.0-dev/0001-feat-For-rbac-ipfs.patch`（这与您 Git 提交记录中的重命名操作一致）。
-3.  **语言标记**：给命令块添加了 `bash` 标记，这样在 GitHub 上会有语法高亮，看起来更专业。
-
-```
