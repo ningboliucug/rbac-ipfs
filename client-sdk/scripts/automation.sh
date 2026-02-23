@@ -79,7 +79,61 @@ if [ "$MODE" = "up" ]; then
         echo "Error: network.sh deployCC 失败" >&2
         exit 1
     fi
+    
+    # --------------------------------------------------------------------------
+    # 1.3.5 应用 WAN 网络模拟 (Traffic Control / Netem)
+    # --------------------------------------------------------------------------
+    echo "=========================================================="
+    echo "开始对 Fabric 和 IPFS 节点注入 WAN 网络模拟 (tc/netem)..."
+    echo "设置: 延迟 20ms (双向RTT 40ms), 带宽 500Mbps"
+    echo "=========================================================="
 
+    # 定义一个函数，利用 nsenter 为指定容器的 eth0 注入网络限制
+    apply_network_limits() {
+        local container_name=$1
+        
+        # 获取容器的主进程 PID
+        local pid=$(docker inspect -f '{{.State.Pid}}' "$container_name" 2>/dev/null)
+        
+        if [ -z "$pid" ] || [ "$pid" == "0" ]; then
+            echo "  [警告] 找不到容器 $container_name 或容器未运行，跳过..."
+            return
+        fi
+
+        echo "  -> 正在限制容器: $container_name (PID: $pid)"
+
+        # 注意：此处使用 -n 参数，意思是仅进入容器的 Network Namespace。
+        # 由于没有使用 -m 参数，执行的依然是宿主机上的 tc 二进制文件，完美避开容器内无 tc 命令的问题。
+
+        # 1. 清理可能已有的 tc 规则 (防止重复执行报错)
+        nsenter -t "$pid" -n tc qdisc del dev eth0 root 2>/dev/null
+        nsenter -t "$pid" -n tc qdisc del dev eth0 ingress 2>/dev/null
+
+        # 2. 设置 Egress (出站) 规则：延迟 20ms，带宽 500mbit
+        # 这里延迟 20ms 意味着 A 发给 B 经历 20ms，B 回复 A 再经历 20ms，总 RTT 约为 40ms。
+        nsenter -t "$pid" -n tc qdisc add dev eth0 root netem delay 25ms loss 0.1% rate 200mbit
+        
+        # 3. 设置 Ingress (入站) 规则：带宽 500mbit，超过部分丢弃 (drop)
+        nsenter -t "$pid" -n tc qdisc add dev eth0 handle ffff: ingress
+        nsenter -t "$pid" -n tc filter add dev eth0 parent ffff: protocol ip u32 match u32 0 0 police rate 200mbit burst 2000k drop flowid :1
+    }
+
+    # 核心：精准匹配需要限制的目标容器！
+    # 匹配规则：包含 peer0.org 或 orderer 或 ipfs-
+    # 排除规则：严格排除包含 dev-peer 的链码容器
+    TARGET_CONTAINERS=$(docker ps --format '{{.Names}}' | grep -E "peer0\.org|orderer|ipfs-" | grep -v "dev-peer")
+
+    for container in $TARGET_CONTAINERS; do
+        apply_network_limits "$container"
+        #echo "Null"
+    done
+
+    echo "=========================================================="
+    echo "WAN 网络模拟注入完成！所有 Fabric 和 IPFS 核心节点已受限。"
+    echo "=========================================================="
+    
+    # 等待 3 秒钟让网络规则稳定
+    sleep 3
     # --------------------------------------------------------------------------
     # 1.4 执行自动化测试流程（包括注册用户、addResource、getToken、updatePolicy）
     # --------------------------------------------------------------------------
